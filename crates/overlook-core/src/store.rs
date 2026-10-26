@@ -163,6 +163,7 @@ impl Store {
     pub fn delete_network(&mut self, id: i64) {
         self.transaction(|s| {
             s.db.execute("DELETE FROM usage WHERE network_id = ?", [id]).ok();
+            s.db.execute("DELETE FROM app_usage WHERE network_id = ?", [id]).ok();
             s.db.execute("DELETE FROM networks WHERE id = ?", [id]).ok();
             s.db.execute("UPDATE baselines SET network_id = NULL WHERE network_id = ?", [id]).ok();
         });
@@ -431,6 +432,19 @@ mod tests {
         let a_tot = all.apps.iter().find(|x| x.id == a).unwrap();
         assert_eq!(a_tot.rx + a_tot.tx, 227);
         assert_eq!(all.apps.iter().find(|x| x.id == b).unwrap().rx, 500);
+    }
+
+    #[test] fn delete_network_removes_its_app_usage() {
+        let mut s = store();
+        let a = s.insert_app("/A.app", "A", None);
+        let t = 1_800_000_000.0;
+        let h = hour_of(t);
+        s.add_app_usage(1, a, t, 100, 10);
+        s.add_app_usage(2, a, t, 7, 0);
+        s.delete_network(1);
+        assert!(s.apps_report(Some(1), h, h).apps.is_empty());
+        let all = s.apps_report(None, h, h);
+        assert_eq!(all.apps.iter().map(|x| x.rx).collect::<Vec<_>>(), vec![7]);
     }
 
     #[test] fn covered_totals_only_count_app_covered_hours() {
