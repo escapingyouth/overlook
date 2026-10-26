@@ -64,7 +64,7 @@ export function Bytes({ value, className = "stat-value" }: Readonly<{ value: num
 }
 
 export function Dialog({ children, onClose, wide }: Readonly<{ children: ReactNode; onClose: () => void; wide?: boolean }>) {
-  const ref = useRef<HTMLDivElement>(null);
+  const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", key);
@@ -78,9 +78,9 @@ export function Dialog({ children, onClose, wide }: Readonly<{ children: ReactNo
   }, []);
   return (
     <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div ref={ref} className={`dialog ${wide ? "wide" : ""}`} role="dialog" aria-modal>
+      <dialog open ref={ref} className={`dialog ${wide ? "wide" : ""}`} aria-modal>
         {children}
-      </div>
+      </dialog>
     </div>
   );
 }

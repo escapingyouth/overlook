@@ -221,7 +221,7 @@ input.text:focus, select.text:focus { border-color: var(--download); }
 
 .backdrop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(0, 0, 0, 0.35); animation: fade 0.12s ease-out; }
 :root[data-theme="dark"] .backdrop { background: rgba(0, 0, 0, 0.6); }
-.dialog { width: min(520px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow); animation: pop 0.14s ease-out; }
+.dialog { position: static; margin: 0; padding: 0; color: inherit; width: min(520px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow: auto; background: var(--surface); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow); animation: pop 0.14s ease-out; }
 .dialog.wide { width: min(640px, calc(100vw - 48px)); }
 .dialog-body { padding: 22px; }
 .dialog h2 { font-size: 16px; font-weight: 600; margin: 0 0 6px; }
