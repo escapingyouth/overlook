@@ -311,18 +311,21 @@ fn mac_icon(key: &str) -> Option<String> {
 // Untested on this platform.
 #[cfg(target_os = "windows")]
 pub fn describe_app(key: &str) -> (String, Option<String>) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    // Each value is marker-prefixed so a missing description can't shift the icon into the name.
     const SCRIPT: &str = "Add-Type -AssemblyName System.Drawing; $p=$env:OVERLOOK_APP_PATH; \
-        (Get-Item -LiteralPath $p).VersionInfo.FileDescription; \
+        try { 'NAME:' + [string](Get-Item -LiteralPath $p).VersionInfo.FileDescription } catch {}; \
+        try { $i=[System.Drawing.Icon]::ExtractAssociatedIcon($p); if ($i) { \
         $b=New-Object System.Drawing.Bitmap 64,64; $g=[System.Drawing.Graphics]::FromImage($b); \
-        $g.DrawImage([System.Drawing.Icon]::ExtractAssociatedIcon($p).ToBitmap(),0,0,64,64); \
+        $g.DrawImage($i.ToBitmap(),0,0,64,64); \
         $m=New-Object System.IO.MemoryStream; $b.Save($m,[System.Drawing.Imaging.ImageFormat]::Png); \
-        [Convert]::ToBase64String($m.ToArray())";
+        'ICON:' + [Convert]::ToBase64String($m.ToArray()) } } catch {}";
     let fallback = (crate::apps::default_name(key), None);
-    let Some(out) = Command::new("powershell").args(["-NoProfile", "-Command", SCRIPT]).env("OVERLOOK_APP_PATH", key).output().ok().filter(|o| o.status.success()) else { return fallback };
+    let Some(out) = Command::new("powershell").args(["-NoProfile", "-Command", SCRIPT]).env("OVERLOOK_APP_PATH", key).creation_flags(CREATE_NO_WINDOW).output().ok().filter(|o| o.status.success()) else { return fallback };
     let text = String::from_utf8_lossy(&out.stdout);
-    let mut lines = text.lines().map(str::trim);
-    let (name, b64) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
-    (if name.is_empty() { fallback.0 } else { name.to_string() }, (!b64.is_empty()).then(|| format!("data:image/png;base64,{b64}")))
+    let field = |m: &str| text.lines().find_map(|l| l.trim().strip_prefix(m)).map(str::trim).filter(|v| !v.is_empty());
+    (field("NAME:").map_or(fallback.0, str::to_string), field("ICON:").map(|b| format!("data:image/png;base64,{b}")))
 }
 
 // Untested on this platform.

@@ -184,7 +184,8 @@ impl Collector {
         let processor = &self.processor;
         let tracker = &mut self.tracker;
         let per_app = self.per_app;
-        let mut status = LiveStatus { last_sample: now, ..Default::default() };
+        let snapshot = per_app.then(system::process_snapshot); // slow (nettop): run before the transaction opens
+        let mut status = LiveStatus { last_sample: now, per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
 
         self.store.transaction(|store| {
             for fp in fingerprints {
@@ -217,9 +218,8 @@ impl Collector {
                 store.save_baseline(&next);
             }
 
-            if per_app {
-                let error = sample_apps(store, tracker, system::process_snapshot(), status.primary, now, processor.gap_threshold());
-                status.per_app = PerAppStatus { enabled: true, error, experimental: cfg!(not(target_os = "macos")) };
+            if let Some(snapshot) = snapshot {
+                status.per_app.error = sample_apps(store, tracker, snapshot, status.primary, now, processor.gap_threshold());
             }
 
             if let Some(last) = store.meta("last_sample").and_then(|v| v.parse::<f64>().ok()) {
