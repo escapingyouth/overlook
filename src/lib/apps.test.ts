@@ -19,13 +19,21 @@ describe("topApps", () => {
     const r = topApps(rep([app("system", 100, 10), app("A", 600, 50)], 1000, 100));
     const sys = r.rows.filter((x) => x.system);
     expect(sys).toHaveLength(1);
-    expect([sys[0].rx, sys[0].tx]).toEqual([500, 60]);
+    expect([sys[0].rx, sys[0].tx]).toEqual([400, 50]);
   });
 
   it("clamps system and rescales shares when apps exceed total", () => {
     const r = topApps(rep([app("A", 150, 0)], 100, 0));
     expect(r.rows.some((x) => x.system)).toBe(false);
     expect(r.rows[0].share).toBe(1);
+  });
+
+  it("keeps a measured system app larger than the remainder", () => {
+    const r = topApps(rep([app("A", 150, 0), app("system", 20, 0)], 100, 0));
+    const sys = r.rows.find((x) => x.system)!;
+    expect([sys.rx, sys.tx]).toEqual([20, 0]);
+    expect(r.total).toBe(170);
+    expect(r.rows.reduce((n, x) => n + x.share, 0)).toBeCloseTo(1);
   });
 
   it("splits top 10 from hidden", () => {

@@ -16,8 +16,8 @@ export function topApps(r: AppsReport, limit = 10): { rows: AppRow[]; hidden: Ap
   const others = r.apps.filter((a) => a.key !== "system");
   const sumRx = others.reduce((s, a) => s + a.rx, 0);
   const sumTx = others.reduce((s, a) => s + a.tx, 0);
-  const sysRx = (sysApp?.rx ?? 0) + Math.max(0, r.coveredRx - sumRx);
-  const sysTx = (sysApp?.tx ?? 0) + Math.max(0, r.coveredTx - sumTx);
+  const sysRx = Math.max(sysApp?.rx ?? 0, r.coveredRx - sumRx);
+  const sysTx = Math.max(sysApp?.tx ?? 0, r.coveredTx - sumTx);
   const all = others.map((a) => ({ key: a.key, name: a.name, icon: a.icon, system: false, rx: a.rx, tx: a.tx }));
   if (sysRx + sysTx > 0) all.push({ key: "system", name: sysApp?.name ?? "System", icon: sysApp?.icon ?? null, system: true, rx: sysRx, tx: sysTx });
   const sum = all.reduce((s, a) => s + a.rx + a.tx, 0);
