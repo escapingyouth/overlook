@@ -29,7 +29,8 @@ Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?plat
 crates/overlook-core   Rust, no UI. Unit-tested.
   system.rs         per-OS counters, boot time, physical-adapter filter, router MAC, Wi-Fi names, permission
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
-  apps.rs           per-app snapshot parsing, app keys, delta tracking
+  apps.rs           per-app snapshot types, app keys, delta tracking
+  nstat.c           macOS per-app byte counts from NetworkStatistics (built only for macOS)
   store.rs          SQLite (hourly buckets; adds apps, app_usage and app_coverage tables for per-app)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
 crates/overlook-helper  Windows (ETW) / Linux (sock_diag) per-app sidecar, run as a service
@@ -49,7 +50,7 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 | Router MAC | configd `ARPResolvedHardwareAddress` | IP Helper `SendARP` (via netdev) | netdev gateway, else `/proc/net/arp` |
 | Wi-Fi name | CoreWLAN (needs Location) | `netsh wlan` (Win 11 needs Location) | `iw` or `nmcli` |
 | Boot time | `kern.boottime` | `GetTickCount64` | `/proc/stat btime` |
-| Per-app bytes | `nettop` | ETW kernel network events via a helper service (experimental) | `sock_diag` TCP via a root helper (experimental) |
+| Per-app bytes | NetworkStatistics (nettop's private framework, loaded at runtime; Wi-Fi + wired bytes, closed connections included) | ETW kernel network events via a helper service (experimental) | `sock_diag` TCP via a root helper (experimental) |
 
 - **Identity.** A network's key is `wifi:<SSID>` or `router:<MAC>`, never the adapter name alone. If a network later gains or loses its SSID, it keeps one history, matched by router MAC.
 - **Sampling.** The collector checks network identity every 5 s and records a sample every 30 s, or immediately when the identity changes. That keeps any ambiguity around a network switch to a few seconds.
@@ -86,7 +87,8 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
 - Per-app tracking is opt-in and only counts from when it's turned on.
-- On macOS and Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. On Linux, per-app also counts TCP only (UDP/QUIC lands in System).
+- On macOS, per-app counts closed connections too, including short downloads that open and close between samples. It uses NetworkStatistics, a private Apple framework that a future macOS may change or remove; if it does, per-app shows an error and network totals are unaffected.
+- On Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. It also counts TCP only (UDP/QUIC lands in System).
 - macOS apps whose icon lives only in an asset catalog get a generic icon.
 - Two different networks with the same SSID share one history.
 - Windows doesn't report whether Location access was granted, so if an SSID can't be read the network falls back to its router name.
