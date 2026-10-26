@@ -113,6 +113,8 @@ impl Enforcer {
         for (interface, kind) in block {
             disconnect(interface, kind);
         }
+        // Forget refusals once nothing is pending for an interface, so a later period can ask again.
+        self.tried.retain(|i, _| throttle.contains_key(i) || self.shaped.contains_key(i));
         let interfaces: HashSet<String> = self.shaped.keys().chain(throttle.keys()).cloned().collect();
         for interface in interfaces {
             let want = throttle.get(&interface).copied();
@@ -141,6 +143,13 @@ mod tests {
         e.apply_with(&[], &want, |_, _| true, |i, k| { calls.push((i.to_string(), k)); false });
         e.apply_with(&[], &want, |_, _| true, |i, k| { calls.push((i.to_string(), k)); true });
         assert_eq!(calls, vec![("en0".to_string(), Some(1000))]);
+
+        let mut e = Enforcer::default();
+        let mut calls = 0;
+        e.apply_with(&[], &want, |_, _| true, |_, _| { calls += 1; false });
+        e.apply_with(&[], &HashMap::new(), |_, _| true, |_, _| panic!("nothing to shape"));
+        e.apply_with(&[], &want, |_, _| true, |_, _| { calls += 1; false });
+        assert_eq!(calls, 2, "a new period asks again");
 
         let mut e = Enforcer::restore("en0=1000");
         e.apply_with(&[], &want, |_, _| true, |_, _| panic!("already shaped"));

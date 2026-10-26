@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { queryStartHour, RangeId, rangeInfo } from "../lib/analytics";
+import { hourOf, RangeId, rangeInfo, rangeInterval } from "../lib/analytics";
 import { api, Status, useApps } from "../lib/api";
 import { AppRow, topApps } from "../lib/apps";
 import { bytes, fmtDate, percent } from "../lib/format";
@@ -43,7 +43,7 @@ export function TopApps({ network, range, status, onEnable }: Readonly<{ network
     } else {
       sub = `${bytes(total)} across ${count} apps · ${info.title}`;
       const shown = all ? [...rows, ...hidden] : rows;
-      if (report.sinceHour !== null && report.sinceHour > queryStartHour(range, new Date()))
+      if (report.sinceHour !== null && report.sinceHour > hourOf(rangeInterval(range, new Date()).start.getTime()))
         note = `Per-app data since ${fmtDate(new Date(report.sinceHour * 3_600_000), { month: "short", day: "numeric" })}`;
       body = (
         <div style={{ overflowX: "auto" }}>

@@ -301,7 +301,7 @@ export function Accuracy({ status }: Readonly<{ status: Status }>) {
       <h4>Not tracked</h4>
       <p>Overlook can't see traffic while it isn't running, and counters restart on reboot, so traffic between startup and Overlook launching is lost. Untracked periods show as gaps, never as zero.</p>
       <h4>Known limits</h4>
-      <p>Counters include local-network traffic (casting, file sharing, backups to a NAS), which may not count against a data cap. VPN traffic is counted once, on the adapter that carries it. Virtual adapters (VPN, Hyper-V, Docker, WSL) are excluded. There's no per-app breakdown.</p>
+      <p>Counters include local-network traffic (casting, file sharing, backups to a NAS), which may not count against a data cap. VPN traffic is counted once, on the adapter that carries it. Virtual adapters (VPN, Hyper-V, Docker, WSL) are excluded. Per-app figures are opt-in and only cover the time since you turned them on; see the README for platform limits.</p>
       <h4>Privacy</h4>
       <p>All data stays in a local SQLite database. Overlook doesn't transmit anything and never reads your location; the Location permission only unlocks Wi-Fi names.</p>
     </div>

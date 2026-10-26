@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { useCallback, useEffect, useState } from "react";
-import { buildReport, Granularity, HourRow, hourOf, queryStartHour, RangeId, Report } from "./analytics";
+import { buildReport, Granularity, HourRow, hourOf, queryStartHour, rangeInterval, RangeId, Report } from "./analytics";
 
 export interface Network {
   id: number;
@@ -137,6 +137,6 @@ export function useReport(network: number | null, range: RangeId, granularity: G
 export function useApps(network: number | null, range: RangeId) {
   return useLive<AppsReport>(() => {
     const now = new Date();
-    return api.apps(network, queryStartHour(range, now), hourOf(now.getTime()) + 1);
+    return api.apps(network, hourOf(rangeInterval(range, now).start.getTime()), hourOf(now.getTime()) + 1);
   }, [network, range]);
 }
