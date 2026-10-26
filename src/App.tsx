@@ -104,14 +104,14 @@ export default function App() {
   );
 }
 
-function Sidebar({ status, selected, onSelect, onSettings, onRename, onDelete }: {
+function Sidebar({ status, selected, onSelect, onSettings, onRename, onDelete }: Readonly<{
   status: Status;
   selected: number | null;
   onSelect: (id: number | null) => void;
   onSettings: () => void;
   onRename: (n: Network) => void;
   onDelete: (n: Network) => void;
-}) {
+}>) {
   const [menu, setMenu] = useState<{ n: Network; x: number; y: number } | null>(null);
   const showNotice = status.wifiNameAccess === "denied" || status.wifiNameAccess === "notDetermined";
   return (

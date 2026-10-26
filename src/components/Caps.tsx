@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api, Cap, CapUsage, displayName, Network, Status, useCaps, useLive } from "../lib/api";
 import { bytes, fmtDate, percent } from "../lib/format";
 import { capForecast, CapForecast, hourOf, weekStart } from "../lib/analytics";
@@ -14,8 +14,9 @@ const kbps = (k: number) => (k >= 1000 ? `${k / 1000} Mbps` : `${k} kbps`);
 const day = (sec: number) => fmtDate(new Date(sec * 1000), { month: "short", day: "numeric" });
 
 export const capScope = (cap: Cap, networks: Network[]) => {
+  if (cap.networkId === null) return "All networks";
   const n = networks.find((n) => n.id === cap.networkId);
-  return cap.networkId === null ? "All networks" : n ? displayName(n) : "Removed network";
+  return n ? displayName(n) : "Removed network";
 };
 
 /** Caps that apply to a network: its own plus the all-networks ones. Null network = every cap. */
@@ -33,27 +34,50 @@ function capStatus(cap: Cap, f: CapForecast): { tone: "ok" | "warn" | "danger"; 
 const TONE = { ok: "var(--download)", warn: "var(--warn)", danger: "var(--danger)" };
 
 /** Used so far, the pace projection (hatched), alert notches and a marker for today. */
-export function CapMeter({ cap, f, compact }: { cap: CapUsage; f: CapForecast; compact?: boolean }) {
+export function CapMeter({ cap, f, compact }: Readonly<{ cap: CapUsage; f: CapForecast; compact?: boolean }>) {
   const tone = capStatus(cap, f).tone;
   const ghost = f.projected === null ? 0 : Math.min(f.projected / cap.limitBytes, 1);
+  // The drawn meter is decorative; a visually hidden native <meter> carries the value for assistive tech.
   return (
-    <div className={`cap-meter ${compact ? "sm" : ""}`} style={{ "--c": TONE[tone] } as React.CSSProperties}
-      role="meter" aria-valuemin={0} aria-valuemax={cap.limitBytes} aria-valuenow={cap.used} aria-valuetext={`${bytes(cap.used)} of ${bytes(cap.limitBytes)}`}>
-      <div className="ghost" style={{ width: `${ghost * 100}%` }} />
-      <div className="fill" style={{ width: `${Math.min(f.share, 1) * 100}%` }} />
-      {cap.alerts.filter((a) => a < 100).map((a) => <span key={a} className="notch" style={{ left: `${a}%` }} />)}
-      {f.elapsed > 0 && f.elapsed < 1 && <span className="today" style={{ left: `${f.elapsed * 100}%` }} title={`Today · ${percent(f.elapsed)} of the period has passed`} />}
-    </div>
+    <>
+      <meter className="sr-only" min={0} max={cap.limitBytes} value={Math.min(cap.used, cap.limitBytes)}
+        aria-label="Cap used" aria-valuetext={`${bytes(cap.used)} of ${bytes(cap.limitBytes)}`} />
+      <div className={`cap-meter ${compact ? "sm" : ""}`} style={{ "--c": TONE[tone] } as React.CSSProperties} aria-hidden>
+        <div className="ghost" style={{ width: `${ghost * 100}%` }} />
+        <div className="fill" style={{ width: `${Math.min(f.share, 1) * 100}%` }} />
+        {cap.alerts.filter((a) => a < 100).map((a) => <span key={a} className="notch" style={{ left: `${a}%` }} />)}
+        {f.elapsed > 0 && f.elapsed < 1 && <span className="today" style={{ left: `${f.elapsed * 100}%` }} title={`Today · ${percent(f.elapsed)} of the period has passed`} />}
+      </div>
+    </>
   );
 }
 
 function actionNote(cap: Cap) {
   if (cap.action === "block") return "Blocks Wi-Fi when used up";
   if (cap.action === "throttle") return `Slows to ${kbps(cap.throttleKbps)} when used up`;
-  return cap.alerts.length ? `Alerts at ${cap.alerts.map((a) => `${a}%`).join(", ")}` : "No alerts";
+  if (!cap.alerts.length) return "No alerts";
+  const list = cap.alerts.map((a) => `${a}%`).join(", ");
+  return `Alerts at ${list}`;
 }
 
-function CapRow({ cap, networks, onEdit }: { cap: CapUsage; networks: Network[]; onEdit: () => void }) {
+function forecastNote(cap: CapUsage, f: CapForecast) {
+  if (f.share >= 1) return `${percent(f.share)} of the cap used`;
+  if (f.projected !== null) return `At this pace, about ${bytes(f.projected)} by ${day(cap.end)}`;
+  return "Too early in the period to forecast";
+}
+
+/** What happens now that the cap is used up. */
+function enforcedNote(cap: CapUsage, scope: string) {
+  const until = day(cap.end);
+  if (cap.action === "block") {
+    const from = cap.networkId === null ? "" : ` from ${scope}`;
+    return `Overlook disconnects Wi-Fi${from} until ${until}.`;
+  }
+  const subject = cap.networkId === null ? "Your connection" : scope;
+  return `${subject} is limited to ${kbps(cap.throttleKbps)} until ${until}.`;
+}
+
+function CapRow({ cap, networks, onEdit }: Readonly<{ cap: CapUsage; networks: Network[]; onEdit: () => void }>) {
   const f = capForecast(cap);
   const status = capStatus(cap, f);
   const scope = capScope(cap, networks);
@@ -76,17 +100,13 @@ function CapRow({ cap, networks, onEdit }: { cap: CapUsage; networks: Network[];
       </div>
       <CapMeter cap={cap} f={f} />
       <div className="cap-foot">
-        {f.share >= 1 ? `${percent(f.share)} of the cap used` : f.projected !== null ? `At this pace, about ${bytes(f.projected)} by ${day(cap.end)}` : "Too early in the period to forecast"}
+        {forecastNote(cap, f)}
         {!(f.share >= 1 && cap.action !== "none") && ` · ${actionNote(cap)}`}
       </div>
       {f.share >= 1 && cap.action !== "none" && (
         <div className="cap-callout">
           <Icon name={cap.action === "block" ? "block" : "gauge"} size={16} style={{ flex: "none" }} />
-          <span style={{ flex: 1 }}>
-            {cap.action === "block"
-              ? `Overlook disconnects Wi-Fi${cap.networkId === null ? "" : ` from ${scope}`} until ${day(cap.end)}.`
-              : `${cap.networkId === null ? "Your connection is" : `${scope} is`} limited to ${kbps(cap.throttleKbps)} until ${day(cap.end)}.`}
-          </span>
+          <span style={{ flex: 1 }}>{enforcedNote(cap, scope)}</span>
           <button className="btn" onClick={onEdit}>Edit cap</button>
         </div>
       )}
@@ -94,7 +114,7 @@ function CapRow({ cap, networks, onEdit }: { cap: CapUsage; networks: Network[];
   );
 }
 
-export function CapsCard({ status, network, onManage }: { status: Status; network: Network | null; onManage: () => void }) {
+export function CapsCard({ status, network, onManage }: Readonly<{ status: Status; network: Network | null; onManage: () => void }>) {
   const caps = capsFor(useCaps() ?? [], network?.id ?? null);
   if (!caps.length) return null;
   return (
@@ -108,7 +128,7 @@ export function CapsCard({ status, network, onManage }: { status: Status; networ
 }
 
 /** One line for the tray popover. */
-export function CapCompact({ cap, networks }: { cap: CapUsage; networks: Network[] }) {
+export function CapCompact({ cap, networks }: Readonly<{ cap: CapUsage; networks: Network[] }>) {
   const f = capForecast(cap);
   const status = capStatus(cap, f);
   return (
@@ -125,7 +145,7 @@ export function CapCompact({ cap, networks }: { cap: CapUsage; networks: Network
   );
 }
 
-export function CapsPane({ status }: { status: Status }) {
+export function CapsPane({ status }: Readonly<{ status: Status }>) {
   const caps = useCaps() ?? [];
   const [editing, setEditing] = useState<Cap | null>(null);
   if (editing) return <CapForm status={status} cap={editing} onDone={() => setEditing(null)} />;
@@ -175,12 +195,15 @@ function useTypical(networkId: number | null, period: Cap["period"]) {
   }, [networkId, period]);
 }
 
-function CapForm({ status, cap, onDone }: { status: Status; cap: Cap; onDone: () => void }) {
+function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; onDone: () => void }>) {
   const [draft, setDraft] = useState(cap);
   const [unit, setUnit] = useState(cap.limitBytes < 1e9 ? 1e6 : 1e9);
   const [amount, setAmount] = useState(String(cap.limitBytes / unit));
   const [custom, setCustom] = useState("");
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // The form replaces the list (and the button that opened it), so focus would otherwise drop to the page.
+  const limitRef = useRef<HTMLInputElement>(null);
+  useEffect(() => limitRef.current?.focus(), []);
   const typical = useTypical(draft.networkId, draft.period);
   const set = (patch: Partial<Cap>) => setDraft({ ...draft, ...patch });
   const limit = Math.round(Number(amount) * unit);
@@ -248,7 +271,7 @@ function CapForm({ status, cap, onDone }: { status: Status; cap: Cap; onDone: ()
       <section className="field-group">
         <div className="field-label">Limit</div>
         <div className="limit-input">
-          <input className="num" type="number" min="0" step="any" required autoFocus value={amount} aria-label="Limit" onChange={(e) => setAmount(e.target.value)} />
+          <input className="num" type="number" min="0" step="any" required ref={limitRef} value={amount} aria-label="Limit" onChange={(e) => setAmount(e.target.value)} />
           <select value={unit} aria-label="Unit" onChange={(e) => setUnit(Number(e.target.value))}>
             <option value={1e6}>MB</option>
             <option value={1e9}>GB</option>

@@ -12,7 +12,7 @@ import { TopApps } from "./TopApps";
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onEnablePerApp }: {
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onEnablePerApp }: Readonly<{
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -22,7 +22,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onAccuracy: () => void;
   onCaps: () => void;
   onEnablePerApp: () => void;
-}) {
+}>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
@@ -102,13 +102,13 @@ function weekOrder() {
   return Array.from({ length: 7 }, (_, i) => (first + i) % 7);
 }
 
-function Peak({ report }: { report: Report }) {
+function Peak({ report }: Readonly<{ report: Report }>) {
   const peak = report.buckets.reduce<Report["buckets"][number] | null>(
     (m, b) => ((b.rx ?? 0) + (b.tx ?? 0) > (m ? (m.rx ?? 0) + (m.tx ?? 0) : 0) ? b : m), null);
   return <>{peak ? `Peak ${bytes((peak.rx ?? 0) + (peak.tx ?? 0))} · ${bucketTitle(peak, report.granularity)}` : "No usage yet"}</>;
 }
 
-function PageHead({ status, network }: { status: Status; network: Network | null }) {
+function PageHead({ status, network }: Readonly<{ status: Status; network: Network | null }>) {
   const active = network ? status.live.active.find((a) => a.networkId === network.id) : status.live.active.find((a) => a.networkId === status.live.primary);
   const current = status.networks.find((n) => n.id === status.live.primary);
   const live = network ? !!active : !!current;
@@ -135,14 +135,14 @@ function PageHead({ status, network }: { status: Status; network: Network | null
   );
 }
 
-function DeltaPill({ value, previous, report }: { value: number | null; previous: number | null; report: Report }) {
+function DeltaPill({ value, previous, report }: Readonly<{ value: number | null; previous: number | null; report: Report }>) {
   if (value === null || previous === null || previous === 0) return null;
   const change = (value - previous) / previous;
   const text = Math.abs(change) < 0.0005 ? "±0%" : `${change > 0 ? "+" : "−"}${percent(Math.abs(change))}`;
   return <span className="delta-pill num" title={`vs ${bytes(previous)} in the ${rangeInfo(report.range).previous}`}>{text}</span>;
 }
 
-function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title: string; value: number | null; previous: number | null; note?: string }) {
+function KpiCard({ icon, title, value, previous, note }: Readonly<{ icon: IconName; title: string; value: number | null; previous: number | null; note?: string }>) {
   const report = useReportContext();
   return (
     <section className="kpi-card">
@@ -159,7 +159,7 @@ function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title
   );
 }
 
-function SplitDonut({ report }: { report: Report }) {
+function SplitDonut({ report }: Readonly<{ report: Report }>) {
   const [v, unit] = scaled(report.total);
   const item = (icon: IconName, label: string, value: number, color: string) => (
     <div className="result">
@@ -199,7 +199,7 @@ function SplitDonut({ report }: { report: Report }) {
   );
 }
 
-function NetworksTable({ status, report, onSelect }: { status: Status; report: Report; onSelect: (id: number) => void }) {
+function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void }>) {
   const totals = useLive(() => api.totals(hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1), [report.start.getTime()]) ?? [];
   const rows = status.networks
     .map((n) => {
@@ -237,7 +237,7 @@ function NetworksTable({ status, report, onSelect }: { status: Status; report: R
   );
 }
 
-function DaysTable({ report }: { report: Report }) {
+function DaysTable({ report }: Readonly<{ report: Report }>) {
   const days = [...report.days].reverse().slice(0, 14);
   const today = new Date().toDateString();
   return (
@@ -276,7 +276,7 @@ function DaysTable({ report }: { report: Report }) {
   );
 }
 
-function HighlightsCard({ report }: { report: Report }) {
+function HighlightsCard({ report }: Readonly<{ report: Report }>) {
   const day = (d: Date) => fmtDate(d, { weekday: "short", month: "short", day: "numeric" });
   const item = (label: string, value: number | null, detail?: string) => (
     <div className="list-row">
@@ -295,7 +295,7 @@ function HighlightsCard({ report }: { report: Report }) {
   );
 }
 
-function NetworkCard({ network, status, onRename }: { network: Network; status: Status; onRename: (n: Network) => void }) {
+function NetworkCard({ network, status, onRename }: Readonly<{ network: Network; status: Status; onRename: (n: Network) => void }>) {
   const live = status.live.active.some((a) => a.networkId === network.id);
   const when = (s: number) => fmtDate(new Date(s * 1000), { dateStyle: "medium", timeStyle: "short" });
   const item = (label: string, value: string, help?: string) => (
@@ -315,7 +315,7 @@ function NetworkCard({ network, status, onRename }: { network: Network; status: 
   );
 }
 
-function Footnote({ report, network, onAccuracy }: { report: Report; network: Network | null; onAccuracy: () => void }) {
+function Footnote({ report, network, onAccuracy }: Readonly<{ report: Report; network: Network | null; onAccuracy: () => void }>) {
   const dropped = useLive(() => api.droppedBytes(report.start.getTime() / 1000), [report.start.getTime()]) ?? 0;
   const parts = ["Measured from interface byte counters, including local-network traffic."];
   if (report.estimated > 0) parts.push(`${bytes(report.estimated)} is estimated (attributed across a network switch or a sleep/restart gap).`);

@@ -83,7 +83,7 @@ const icons = {
 
 export type IconName = keyof typeof icons;
 
-export function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: React.CSSProperties }) {
+export function Icon({ name, size = 16, className, style }: Readonly<{ name: IconName; size?: number; className?: string; style?: React.CSSProperties }>) {
   return <HugeiconsIcon icon={icons[name]} size={size} strokeWidth={1.6} color="currentColor" className={`icon ${className ?? ""}`} style={style} aria-hidden />;
 }
 

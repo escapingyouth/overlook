@@ -5,12 +5,12 @@ import { AppRow, topApps } from "../lib/apps";
 import { bytes, fmtDate, percent } from "../lib/format";
 import { Icon } from "./Icon";
 
-function AppIcon({ app }: { app: AppRow }) {
+function AppIcon({ app }: Readonly<{ app: AppRow }>) {
   if (app.icon) return <img className="app-icon" src={app.icon} alt="" />;
   return <span className="icon-tile"><Icon name={app.system ? "computer" : "app"} size={14} /></span>;
 }
 
-export function TopApps({ network, range, status, onEnable }: { network: number | null; range: RangeId; status: Status; onEnable: () => void }) {
+export function TopApps({ network, range, status, onEnable }: Readonly<{ network: number | null; range: RangeId; status: Status; onEnable: () => void }>) {
   const { enabled, error } = status.live.perApp;
   const report = useApps(network, range);
   const [all, setAll] = useState(false);

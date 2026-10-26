@@ -50,6 +50,21 @@ let caps = [
   { id: 2, networkId: null, period: "month", reset: 12, limitBytes: 1.2e12, alerts: [80, 100], action: "none", throttleKbps: 1000 },
   { id: 3, networkId: 1, period: "week", reset: 1, limitBytes: 20e9, alerts: [50, 80, 100], action: "throttle", throttleKbps: 1000 },
 ];
+// Extra usage on top of the synthetic history so the mock shows a cap that's used up and one that's close.
+const EXTRA_USED: Record<number, number> = { 1: 15.6e9, 3: 7e9 };
+
+function periodBounds(period: string, reset: number): [Date, Date] {
+  const today = new Date(new Date().setHours(0, 0, 0, 0));
+  const [y, m, d] = [today.getFullYear(), today.getMonth(), today.getDate()];
+  if (period === "day") return [today, new Date(y, m, d + 1)];
+  if (period === "week") {
+    const start = d - ((today.getDay() - reset + 7) % 7);
+    return [new Date(y, m, start), new Date(y, m, start + 7)];
+  }
+  const month = m - (d < reset ? 1 : 0);
+  return [new Date(y, month, reset), new Date(y, month + 1, reset)];
+}
+
 const sumUsed = (network: number | null, fromHour: number) => usage(network, fromHour, nowHour).reduce((s, r) => s + r.rx + r.tx, 0);
 
 const params = new URLSearchParams(location.search);
@@ -104,14 +119,8 @@ mockIPC((cmd, args: any) => {
       });
     case "caps":
       return caps.map((c) => {
-        const today = new Date(new Date().setHours(0, 0, 0, 0));
-        const start = c.period === "day" ? today
-          : c.period === "week" ? new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() - c.reset + 7) % 7))
-          : new Date(today.getFullYear(), today.getMonth() - (today.getDate() < c.reset ? 1 : 0), c.reset);
-        const end = c.period === "day" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1)
-          : c.period === "week" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7)
-          : new Date(start.getFullYear(), start.getMonth() + 1, c.reset);
-        return { ...c, used: sumUsed(c.networkId, Math.floor(start.getTime() / HOUR)) + (c.id === 1 ? 15.6e9 : c.id === 3 ? 7e9 : 0), start: start.getTime() / 1000, end: end.getTime() / 1000 };
+        const [start, end] = periodBounds(c.period, c.reset);
+        return { ...c, used: sumUsed(c.networkId, Math.floor(start.getTime() / HOUR)) + (EXTRA_USED[c.id] ?? 0), start: start.getTime() / 1000, end: end.getTime() / 1000 };
       });
     case "save_cap":
       caps = args.cap.id ? caps.map((c) => (c.id === args.cap.id ? args.cap : c)) : [...caps, { ...args.cap, id: Date.now() }];
@@ -124,7 +133,7 @@ mockIPC((cmd, args: any) => {
     case "apps":
       return appsReport(args.network, args.fromHour, args.toHour);
     case "set_per_app":
-      if (args.enabled && appsMode === "deny") throw "Permission wasn't granted";
+      if (args.enabled && appsMode === "deny") throw new Error("Permission wasn't granted");
       perAppOn = args.enabled;
       return null;
     case "delete_app_data":

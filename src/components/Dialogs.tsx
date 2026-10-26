@@ -7,7 +7,10 @@ import { Icon, IconName } from "./Icon";
 import { CapsPane } from "./Caps";
 import { Dialog, Segmented, Setting, Toggle } from "./ui";
 
-export function RenameDialog({ network, onClose }: { network: Network; onClose: () => void }) {
+// Tauri commands reject with a string; anything else (the dev mock) throws an Error.
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export function RenameDialog({ network, onClose }: Readonly<{ network: Network; onClose: () => void }>) {
   const [name, setName] = useState(displayName(network));
   const save = (value: string | null) => {
     api.rename(network.id, value);
@@ -18,7 +21,7 @@ export function RenameDialog({ network, onClose }: { network: Network; onClose: 
       <form className="dialog-body" onSubmit={(e) => { e.preventDefault(); save(name); }}>
         <h2>Rename network</h2>
         <p>Only changes how this network appears in Overlook.</p>
-        <input className="text" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="text" data-autofocus value={name} onChange={(e) => setName(e.target.value)} />
       </form>
       <div className="dialog-actions">
         {network.customName && <button className="btn ghost" style={{ marginRight: "auto" }} onClick={() => save(null)}>Use original name</button>}
@@ -29,7 +32,7 @@ export function RenameDialog({ network, onClose }: { network: Network; onClose: 
   );
 }
 
-export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: { title: string; message: string; confirm: string; onConfirm: () => void; onClose: () => void }) {
+export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: Readonly<{ title: string; message: string; confirm: string; onConfirm: () => void; onClose: () => void }>) {
   return (
     <Dialog onClose={onClose}>
       <div className="dialog-body">
@@ -37,14 +40,14 @@ export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: {
         <p>{message}</p>
       </div>
       <div className="dialog-actions">
-        <button className="btn" autoFocus onClick={onClose}>Cancel</button>
+        <button className="btn" data-autofocus onClick={onClose}>Cancel</button>
         <button className="btn danger" onClick={() => { onConfirm(); onClose(); }}>{confirm}</button>
       </div>
     </Dialog>
   );
 }
 
-export function PerAppDialog({ status, onClose }: { status: Status; onClose: () => void }) {
+export function PerAppDialog({ status, onClose }: Readonly<{ status: Status; onClose: () => void }>) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const helper = status.platform === "windows" ? "admin rights" : "root";
@@ -55,7 +58,7 @@ export function PerAppDialog({ status, onClose }: { status: Status; onClose: () 
       await api.setPerApp(true);
       onClose();
     } catch (e) {
-      setError(String(e));
+      setError(errorText(e));
       setBusy(false);
     }
   };
@@ -77,14 +80,14 @@ export function PerAppDialog({ status, onClose }: { status: Status; onClose: () 
         {error && <span className="pill warn">{error}</span>}
       </div>
       <div className="dialog-actions">
-        <button className="btn" autoFocus onClick={onClose}>Cancel</button>
+        <button className="btn" data-autofocus onClick={onClose}>Cancel</button>
         <button className="btn primary" disabled={busy} onClick={turnOn}>Turn on</button>
       </div>
     </Dialog>
   );
 }
 
-export function Onboarding({ status, onDone }: { status: Status; onDone: () => void }) {
+export function Onboarding({ status, onDone }: Readonly<{ status: Status; onDone: () => void }>) {
   const point = (icon: IconName, title: string, text: string) => (
     <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
       <Icon name={icon} size={16} style={{ color: "var(--download)", marginTop: 1, flex: "none" }} />
@@ -110,7 +113,7 @@ export function Onboarding({ status, onDone }: { status: Status; onDone: () => v
       </div>
       <div className="dialog-actions">
         {gated && <button className="btn" style={{ marginRight: "auto" }} onClick={() => api.requestWifiNames()}>Allow Wi-Fi names</button>}
-        <button className="btn primary" autoFocus onClick={onDone}>Get started</button>
+        <button className="btn primary" data-autofocus onClick={onDone}>Get started</button>
       </div>
     </Dialog>
   );
@@ -124,13 +127,13 @@ const TABS: { id: string; label: string; icon: IconName }[] = [
   { id: "accuracy", label: "Accuracy", icon: "info" },
 ];
 
-export function Settings({ status, initialTab, appearance, onAppearance, onClose }: {
+export function Settings({ status, initialTab, appearance, onAppearance, onClose }: Readonly<{
   status: Status;
   initialTab?: string;
   appearance: Appearance;
   onAppearance: (a: Appearance) => void;
   onClose: () => void;
-}) {
+}>) {
   const [tab, setTab] = useState(initialTab ?? "general");
   return (
     <Dialog onClose={onClose} wide>
@@ -156,7 +159,7 @@ export function Settings({ status, initialTab, appearance, onAppearance, onClose
   );
 }
 
-function General({ status }: { status: Status }) {
+function General({ status }: Readonly<{ status: Status }>) {
   const [login, setLogin] = useState<boolean | null>(null);
   useEffect(() => {
     isEnabled().then(setLogin).catch(() => setLogin(false));
@@ -183,7 +186,7 @@ function General({ status }: { status: Status }) {
   );
 }
 
-function AppearancePane({ value, onChange }: { value: Appearance; onChange: (a: Appearance) => void }) {
+function AppearancePane({ value, onChange }: Readonly<{ value: Appearance; onChange: (a: Appearance) => void }>) {
   return (
     <>
       <h3>Appearance</h3>
@@ -207,7 +210,7 @@ function AppearancePane({ value, onChange }: { value: Appearance; onChange: (a: 
   );
 }
 
-function MiniPreview({ dark }: { dark: boolean }) {
+function MiniPreview({ dark }: Readonly<{ dark: boolean }>) {
   const c = dark
     ? { bg: "#0b0b0c", card: "#111112", line: "rgba(255,255,255,0.08)", ink: "#ededef", down: "#a29ef6", up: "#6366f1" }
     : { bg: "#fafafa", card: "#ffffff", line: "rgba(0,0,0,0.08)", ink: "#0a0a0b", down: "#9b98f3", up: "#4f46e5" };
@@ -230,7 +233,7 @@ function MiniPreview({ dark }: { dark: boolean }) {
   );
 }
 
-function DataPane({ status }: { status: Status }) {
+function DataPane({ status }: Readonly<{ status: Status }>) {
   const [confirm, setConfirm] = useState(false);
   const [perApp, setPerApp] = useState(false);
   const [askDelete, setAskDelete] = useState(false);
@@ -241,7 +244,7 @@ function DataPane({ status }: { status: Status }) {
       await api.setPerApp(false);
       setAskDelete(true);
     } catch (e) {
-      setOffError(String(e));
+      setOffError(errorText(e));
     }
   };
   const dropped = useLive(() => api.droppedBytes(Date.now() / 1000 - 365 * 86400), []) ?? 0;
@@ -284,7 +287,7 @@ function DataPane({ status }: { status: Status }) {
   );
 }
 
-export function Accuracy({ status }: { status: Status }) {
+export function Accuracy({ status }: Readonly<{ status: Status }>) {
   const counters = { macos: "the kernel's 64-bit interface counters (sysctl)", windows: "the 64-bit adapter counters from IP Helper (GetIfEntry2)", linux: "the kernel's interface statistics in /sys/class/net" }[status.platform] ?? "the OS interface counters";
   return (
     <div className="prose" style={{ overflowY: "auto", maxHeight: 420 }}>
