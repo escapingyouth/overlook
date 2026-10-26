@@ -1,0 +1,24 @@
+[package]
+name = "tally-core"
+version = "1.0.0"
+edition = "2021"
+description = "Network usage collection, attribution and storage for Tally"
+
+[features]
+default = ["bundled-sqlite"]
+# Disabled only for cross-target `cargo check` (no C toolchain for the target).
+bundled-sqlite = ["rusqlite/bundled"]
+
+[dependencies]
+netdev = { version = "0.46", default-features = false, features = ["gateway"] }
+rusqlite = "0.41"
+serde = { version = "1", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+libc = "0.2"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-core-wlan = "0.3"
+objc2-core-location = "0.3"
+system-configuration = "0.8"
+core-foundation = "0.10"
