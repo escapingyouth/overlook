@@ -1,0 +1,21 @@
+#!/bin/sh
+header=$(head -n1 "$1")
+
+case "$header" in
+  Merge\ *|Revert\ \"*|fixup!\ *|squash!\ *|amend!\ *) exit 0 ;;
+esac
+
+types="feat|fix|perf|refactor|style|test|docs|build|ci|chore|revert"
+pattern="^($types)(\([a-z0-9-]+\))?!?: [a-z0-9].*[^. ]$"
+
+if ! printf '%s' "$header" | grep -Eq "$pattern"; then
+  echo "commit-msg: header must follow Conventional Commits, e.g. 'feat(ui): add range menu'" >&2
+  echo "  types: feat, fix, perf, refactor, style, test, docs, build, ci, chore, revert" >&2
+  echo "  got:   $header" >&2
+  exit 1
+fi
+
+if [ "${#header}" -gt 72 ]; then
+  echo "commit-msg: header is ${#header} characters; keep it to 72 or fewer" >&2
+  exit 1
+fi

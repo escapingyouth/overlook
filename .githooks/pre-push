@@ -1,0 +1,6 @@
+#!/bin/sh
+set -e
+export PATH="$HOME/.cargo/bin:$PATH"
+npx --no-install tsc --noEmit -p .
+npx --no-install vitest run --silent
+cargo test --workspace --quiet

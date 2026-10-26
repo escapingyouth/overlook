@@ -1,0 +1,8 @@
+
+# <type>(<scope>): <subject>     one line, <= 72 chars, imperative, lowercase, no period
+#
+# types:  feat fix perf refactor style test docs build ci chore revert
+# scopes: core app ui dev brand deps repo
+#
+# feat(ui): add range menu and csv export
+# fix(core): treat counters going backwards as a reset

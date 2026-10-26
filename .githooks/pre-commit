@@ -1,0 +1,14 @@
+#!/bin/sh
+set -e
+export PATH="$HOME/.cargo/bin:$PATH"
+staged=$(git diff --cached --name-only --diff-filter=ACMR)
+
+if printf '%s\n' "$staged" | grep -Eq '^(src/|index\.html|package\.json|tsconfig|vite\.config)'; then
+  npx --no-install tsc --noEmit -p .
+  npx --no-install vitest run --silent
+fi
+
+if printf '%s\n' "$staged" | grep -Eq '^(crates/|src-tauri/src/|Cargo\.(toml|lock)|src-tauri/Cargo\.toml)'; then
+  cargo test -p tally-core --quiet
+  cargo check -p tally --quiet
+fi
