@@ -7,6 +7,10 @@ npm install        # also points git at .githooks via the prepare script
 npm run tauri dev
 ```
 
+## Branches
+
+Branch off `dev` and open your pull request against `dev`. `main` only receives `dev` and is the only branch releases are built from (see *Branches & releases* in the README). CI must pass on macOS, Windows and Linux before a pull request can merge.
+
 ## Commits
 
 Every commit is one line in [Conventional Commits](https://www.conventionalcommits.org) form:

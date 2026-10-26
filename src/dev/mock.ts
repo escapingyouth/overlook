@@ -1,3 +1,4 @@
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { HourRow } from "../lib/analytics";
 
@@ -44,19 +45,76 @@ function usage(network: number | null, from: number, to: number) {
   return [...sum.values()].sort((a, b) => a.hour - b.hour);
 }
 
+let caps: { id: number; networkId: number | null; period: string; reset: number; limitBytes: number; alerts: number[]; action: string; throttleKbps: number; appId: number | null }[] = [
+  { id: 1, networkId: 3, period: "month", reset: 1, limitBytes: 15e9, alerts: [80, 100], action: "block", throttleKbps: 1000, appId: null },
+  { id: 2, networkId: null, period: "month", reset: 12, limitBytes: 1.2e12, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null },
+  { id: 3, networkId: 1, period: "week", reset: 1, limitBytes: 20e9, alerts: [50, 80, 100], action: "throttle", throttleKbps: 1000, appId: null },
+  { id: 4, networkId: null, period: "week", reset: 1, limitBytes: 40e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: 2 },
+];
+// Extra usage on top of the synthetic history so the mock shows a cap that's used up and one that's close.
+const EXTRA_USED: Record<number, number> = { 1: 15.6e9, 3: 7e9 };
+
+function periodBounds(period: string, reset: number): [Date, Date] {
+  const today = new Date(new Date().setHours(0, 0, 0, 0));
+  const [y, m, d] = [today.getFullYear(), today.getMonth(), today.getDate()];
+  if (period === "day") return [today, new Date(y, m, d + 1)];
+  if (period === "week") {
+    const start = d - ((today.getDay() - reset + 7) % 7);
+    return [new Date(y, m, start), new Date(y, m, start + 7)];
+  }
+  const month = m - (d < reset ? 1 : 0);
+  return [new Date(y, month, reset), new Date(y, month + 1, reset)];
+}
+
+const sumUsed = (network: number | null, fromHour: number) => usage(network, fromHour, nowHour).reduce((s, r) => s + r.rx + r.tx, 0);
+
 const params = new URLSearchParams(location.search);
+const appsMode = params.get("apps");
+const platform = params.get("platform") ?? "macos";
+let perAppOn = appsMode !== "off" && appsMode !== "deny";
+let trayRate = false;
+let weeklySummary = true;
+
+// name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
+const appDefs: [string, string, number, number][] = [
+  ["Steam", "#1b2838", 0.18, 0.2], ["Dropbox", "#0061ff", 0.1, 3], ["Google Chrome", "#ea4335", 0.1, 0.8], ["Zoom", "#2d8cff", 0.08, 2.5],
+  ["Spotify", "#1db954", 0.07, 0.3], ["Slack", "#611f69", 0.05, 0.9], ["Safari", "#0a84ff", 0.05, 0.7], ["Microsoft Teams", "#5b5fc7", 0.04, 1.8],
+  ["Figma", "#f24e1e", 0.04, 1.2], ["Docker", "#2496ed", 0.03, 1], ["iCloud Drive", "#4aa8f0", 0.03, 2], ["Discord", "#5865f2", 0.02, 0.8], ["OneDrive", "#0f6cbd", 0.02, 2.2],
+];
+const letterIcon = (name: string, color: string) =>
+  "data:image/svg+xml;utf8," + encodeURIComponent(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" rx="9" fill="${color}"/><text x="20" y="27" font-family="sans-serif" font-size="20" font-weight="600" text-anchor="middle" fill="#fff">${name[0]}</text></svg>`);
+const sinceHour = nowHour - 20 * 24;
+
+function appsReport(network: number | null, from: number, to: number) {
+  if (appsMode === "empty") return { apps: [], coveredRx: 0, coveredTx: 0, sinceHour: null };
+  const list = usage(network, Math.max(from, sinceHour), to);
+  const rx = list.reduce((s, r) => s + r.rx, 0);
+  const tx = list.reduce((s, r) => s + r.tx, 0);
+  const apps = appDefs.map(([name, color, w, up], i) => {
+    const f = w * (1 + 0.4 * Math.sin(i * (network ?? 5)));
+    return { id: i + 1, key: name.toLowerCase().replace(/ /g, "-"), name, icon: letterIcon(name, color), rx: Math.round(rx * f), tx: Math.round(tx * Math.min(0.2, w * up * 0.6)) };
+  });
+  return { apps, coveredRx: rx, coveredTx: tx, sinceHour };
+}
 mockWindows(location.hash === "#tray" ? "tray" : "main");
 mockIPC((cmd, args: any) => {
   switch (cmd) {
     case "status":
       return {
         networks: params.has("empty") ? [] : networks,
-        live: { active: [{ networkId: 1, interface: "en0", kind: "wifi" }], primary: 1, rate: [1_840_000, 96_000], lastSample: now / 1000 },
+        live: { active: [params.has("hotspot") ? { networkId: 3, interface: "en0", kind: "wifi", hotspot: true } : { networkId: 1, interface: "en0", kind: "wifi", hotspot: false }],
+          primary: params.has("hotspot") ? 3 : 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
+          perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: platform !== "macos" } },
         firstCoveredHour: nowHour - 400 * 24,
         wifiNameAccess: params.get("access") ?? "granted",
-        platform: params.get("platform") ?? "macos",
+        platform,
         sampleInterval: 30,
         retentionMonths: 24,
+        uploadAlerts: true,
+        weeklySummary,
+        canThrottle: params.get("platform") !== "windows",
+        trayRate,
       };
     case "usage":
       return { rows: usage(args.network, args.fromHour, args.toHour), coverage: coverage.filter(([h]) => h >= args.fromHour && h <= args.toHour) };
@@ -65,6 +123,39 @@ mockIPC((cmd, args: any) => {
         const list = usage(id, args.fromHour, args.toHour);
         return { networkId: id, rx: list.reduce((s, r) => s + r.rx, 0), tx: list.reduce((s, r) => s + r.tx, 0) };
       });
+    case "caps":
+      return caps.map((c) => {
+        const [start, end] = periodBounds(c.period, c.reset);
+        const from = Math.floor(start.getTime() / HOUR);
+        const app = c.appId === null ? undefined : appsReport(c.networkId, from, nowHour).apps.find((a) => a.id === c.appId);
+        const used = c.appId === null ? sumUsed(c.networkId, from) + (EXTRA_USED[c.id] ?? 0) : (app?.rx ?? 0) + (app?.tx ?? 0);
+        return { ...c, used, start: start.getTime() / 1000, end: end.getTime() / 1000, appName: app?.name ?? null };
+      });
+    case "set_weekly_summary":
+      weeklySummary = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "set_tray_rate":
+      trayRate = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "save_cap":
+      if (args.cap.appId !== null) args.cap.action = "none";
+      caps = args.cap.id ? caps.map((c) => (c.id === args.cap.id ? args.cap : c)) : [...caps, { ...args.cap, id: Date.now() }];
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "delete_cap":
+      caps = caps.filter((c) => c.id !== args.id);
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "apps":
+      return appsReport(args.network, args.fromHour, args.toHour);
+    case "set_per_app":
+      if (args.enabled && appsMode === "deny") throw new Error("Permission wasn't granted");
+      perAppOn = args.enabled;
+      return null;
+    case "delete_app_data":
+      return null;
     case "dropped_bytes":
       return 18_400_000;
     case "plugin:autostart|is_enabled":
@@ -72,4 +163,4 @@ mockIPC((cmd, args: any) => {
     default:
       return null;
   }
-});
+}, { shouldMockEvents: true });

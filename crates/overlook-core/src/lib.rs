@@ -1,8 +1,12 @@
 
+pub mod apps;
+pub mod caps;
+pub mod enforce;
 pub mod processor;
 pub mod store;
 pub mod system;
 
+use apps::{app_key, AppTracker, Snapshot, SYSTEM_KEY};
 use processor::{Baseline, Outcome, Processor};
 use serde::Serialize;
 use std::collections::HashMap;
@@ -22,6 +26,7 @@ pub struct Fingerprint {
     pub kind: String,
     pub ssid: Option<String>,
     pub router_mac: Option<String>,
+    pub hotspot: bool,
 }
 
 impl Fingerprint {
@@ -48,6 +53,8 @@ pub struct ActiveNetwork {
     pub network_id: i64,
     pub interface: String,
     pub kind: String,
+    /// Tethered to a phone, so probably metered.
+    pub hotspot: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -57,24 +64,69 @@ pub struct LiveStatus {
     pub primary: Option<i64>,
     pub rate: Option<(f64, f64)>,
     pub last_sample: f64,
+    pub per_app: PerAppStatus,
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PerAppStatus {
+    pub enabled: bool,
+    pub error: Option<String>,
+    pub experimental: bool,
+}
+
+/// Feeds one process snapshot into the store. Returns the error to show, if any.
+pub fn sample_apps(store: &Store, tracker: &mut AppTracker, snapshot: Result<Snapshot, String>, network: Option<i64>, now: f64, gap: f64) -> Option<String> {
+    let snap = match snapshot {
+        Ok(s) => s,
+        Err(e) => return Some(e),
+    };
+    let previous = tracker.last_at();
+    let Some(deltas) = tracker.sample(&snap.session, snap.procs, network, now, gap) else { return None };
+    if let Some(prev) = previous {
+        store.add_app_coverage(prev, now);
+    }
+    let mut grouped: HashMap<String, (u64, u64)> = HashMap::new();
+    for (path, rx, tx) in deltas {
+        let e = grouped.entry(app_key(&path)).or_default();
+        e.0 += rx;
+        e.1 += tx;
+    }
+    for (key, (rx, tx)) in grouped {
+        let id = store.app_id(&key).unwrap_or_else(|| {
+            let (name, icon) = if key == SYSTEM_KEY { ("System".into(), None) } else { system::describe_app(&key) };
+            store.insert_app(&key, &name, icon.as_deref())
+        });
+        if let Some(n) = network {
+            store.add_app_usage(n, id, now, rx, tx);
+        }
+    }
+    None
 }
 
 pub struct Collector {
     pub store: Store,
     processor: Processor,
     ssid_cache: HashMap<String, (Option<String>, Instant)>,
+    metered_cache: HashMap<String, (bool, Instant)>,
     mac_cache: HashMap<String, String>,
     pub status: LiveStatus,
+    pub per_app: bool,
+    pub tracker: AppTracker,
     last_keys: Vec<Option<String>>,
     last_full_sample: Option<Instant>,
 }
 
 impl Collector {
     pub fn new(store: Store) -> Collector {
+        let per_app = store.meta("per_app").as_deref() == Some("on");
         Collector {
+            per_app,
+            tracker: AppTracker::default(),
             store,
             processor: Processor { sample_interval: SAMPLE_INTERVAL },
             ssid_cache: HashMap::new(),
+            metered_cache: HashMap::new(),
             mac_cache: HashMap::new(),
             status: LiveStatus::default(),
             last_keys: vec![],
@@ -105,7 +157,8 @@ impl Collector {
                 let router_mac = system::normalize_mac(&gateway.mac_addr.to_string()).or_else(|| self.cached_mac(&ip, &i.name));
                 let wifi = system::is_wifi(i);
                 let ssid = if wifi { self.cached_ssid(i, router_mac.as_deref()) } else { None };
-                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac })
+                let hotspot = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
+                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot })
             })
             .collect()
     }
@@ -118,6 +171,19 @@ impl Collector {
         let mac = system::neighbor_mac(ip, interface)?;
         self.mac_cache.insert(key, mac.clone());
         Some(mac)
+    }
+
+    /// Keyed by router and SSID too, so joining another network re-checks at once even when one of them is unknown.
+    fn cached_metered(&mut self, i: &netdev::Interface, router: Option<&str>, ssid: Option<&str>) -> bool {
+        let key = format!("{}|{}|{}", i.name, router.unwrap_or(""), ssid.unwrap_or(""));
+        match self.metered_cache.get(&key) {
+            Some(&(m, at)) if at.elapsed() < Duration::from_secs(120) => m,
+            _ => {
+                let m = system::metered(i);
+                self.metered_cache.insert(key, (m, Instant::now()));
+                m
+            }
+        }
     }
 
     fn cached_ssid(&mut self, i: &netdev::Interface, router: Option<&str>) -> Option<String> {
@@ -137,7 +203,10 @@ impl Collector {
         let counters = system::counters(interfaces);
         let primary_iface = interfaces.iter().find(|i| i.default).map(|i| i.name.clone());
         let processor = &self.processor;
-        let mut status = LiveStatus { last_sample: now, ..Default::default() };
+        let tracker = &mut self.tracker;
+        let per_app = self.per_app;
+        let snapshot = per_app.then(system::process_snapshot); // up to 2 s: run before the transaction opens
+        let mut status = LiveStatus { last_sample: now, per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
 
         self.store.transaction(|store| {
             for fp in fingerprints {
@@ -145,7 +214,7 @@ impl Collector {
                 let name = fp.default_name();
                 let input = NetworkInput { key: &key, name: &name, kind: &fp.kind, ssid: fp.ssid.as_deref(), router_mac: fp.router_mac.as_deref(), interface: &fp.interface };
                 if let Ok(id) = store.resolve_network(&input, now) {
-                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone() });
+                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot });
                 }
             }
             let primary = status.active.iter().find(|a| Some(&a.interface) == primary_iface.as_ref()).or(status.active.first()).cloned();
@@ -170,6 +239,10 @@ impl Collector {
                 store.save_baseline(&next);
             }
 
+            if let Some(snapshot) = snapshot {
+                status.per_app.error = sample_apps(store, tracker, snapshot, status.primary, now, processor.gap_threshold());
+            }
+
             if let Some(last) = store.meta("last_sample").and_then(|v| v.parse::<f64>().ok()) {
                 if now > last && now - last <= processor.gap_threshold() {
                     store.add_coverage(last, now);
@@ -191,15 +264,44 @@ fn live_rate(primary: &ActiveNetwork, iface: &netdev::Interface, prev: &Baseline
 mod tests {
     use super::*;
 
+    fn snap(at: f64, rx: u64, tx: u64) -> Snapshot {
+        Snapshot { session: "s".into(), at, procs: vec![apps::ProcSample { pid: 7, path: "/Applications/Steam.app/Contents/MacOS/steam_osx".into(), rx, tx }] }
+    }
+
+    #[test] fn sample_apps_attributes_after_baseline() {
+        let store = Store::open(":memory:").unwrap();
+        let (t, gap) = (36000.0, 180.0);
+        let mut tr = AppTracker::default();
+        assert_eq!(sample_apps(&store, &mut tr, Ok(snap(t, 0, 0)), Some(1), t, gap), None);
+        assert!(store.apps_report(None, 0, 100).apps.is_empty());
+        assert_eq!(sample_apps(&store, &mut tr, Ok(snap(t + 30.0, 5000, 100)), Some(1), t + 30.0, gap), None);
+        let r = store.apps_report(None, 0, 100);
+        assert_eq!((r.apps.len(), r.apps[0].name.as_str(), r.apps[0].rx, r.apps[0].tx), (1, "Steam", 5000, 100));
+        assert_eq!(r.since_hour, Some(10));
+        assert_eq!(store.coverage(0, 100), vec![]); // network coverage is untouched; app coverage is separate
+    }
+
+    #[test] fn per_app_failure_keeps_network_collection() {
+        let mut store = Store::open(":memory:").unwrap();
+        let mut tr = AppTracker::default();
+        store.transaction(|s| {
+            let err = sample_apps(s, &mut tr, Err("Per-app helper isn't running".into()), Some(1), 36000.0, 180.0);
+            assert_eq!(err.as_deref(), Some("Per-app helper isn't running"));
+            s.add(&processor::UsageDelta { network_id: 1, at: 36000.0, rx: 10, tx: 5, estimated: false });
+        });
+        assert!(store.apps_report(None, 0, 100).apps.is_empty());
+        assert!(!store.hours(None, 0, 100).is_empty());
+    }
+
     #[test] fn fingerprint_never_keys_on_interface_alone() {
-        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None };
+        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false };
         assert_eq!(fp.key(), None);
         let fp = Fingerprint { ssid: Some("Home".into()), router_mac: Some("aa:bb:cc:dd:ee:ff".into()), ..fp };
         assert_eq!(fp.key().as_deref(), Some("wifi:Home"));
     }
 
     #[test] fn default_name_uses_router_suffix() {
-        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()) };
+        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false };
         assert_eq!(fp.default_name(), "Ethernet Network · EE:FF");
     }
 

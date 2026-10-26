@@ -50,7 +50,7 @@ const useWidth = () => {
   return [ref, width] as const;
 };
 
-export function UsageChart({ report, mode, height = 260, compact = false }: { report: Report; mode: SeriesMode; height?: number; compact?: boolean }) {
+export function UsageChart({ report, mode, height = 260, compact = false }: Readonly<{ report: Report; mode: SeriesMode; height?: number; compact?: boolean }>) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -148,7 +148,7 @@ export function UsageChart({ report, mode, height = 260, compact = false }: { re
   );
 }
 
-export function PatternChart({ values, labels, height = 150 }: { values: { rx: number; tx: number }[]; labels: (string | null)[]; height?: number }) {
+export function PatternChart({ values, labels, height = 150 }: Readonly<{ values: { rx: number; tx: number }[]; labels: (string | null)[]; height?: number }>) {
   const [ref, width] = useWidth();
   const max = Math.max(0, ...values.map((v) => v.rx + v.tx));
   const { divisor, unit } = axisUnit(max);
@@ -190,7 +190,14 @@ export function PatternChart({ values, labels, height = 150 }: { values: { rx: n
 
 export type SeriesVisibility = { download: boolean; upload: boolean };
 
-export function TrendChart({ report, show, height = 280 }: { report: Report; show: SeriesVisibility; height?: number }) {
+/** Pass onPick to make buckets selectable by click, or arrow keys and Enter. */
+export function TrendChart({ report, show, height = 280, picked = null, onPick }: Readonly<{
+  report: Report;
+  show: SeriesVisibility;
+  height?: number;
+  picked?: number | null;
+  onPick?: (i: number | null) => void;
+}>) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const buckets = report.buckets;
@@ -227,11 +234,27 @@ export function TrendChart({ report, show, height = 280 }: { report: Report; sho
   };
   const hovered = hover !== null ? buckets[hover] : null;
   const flip = hover !== null && x(hover) > width - 210;
+  const pick = (i: number | null) => onPick?.(i === null || i === picked || buckets[i]?.rx === null ? null : i);
+  const onKey = (e: React.KeyboardEvent) => {
+    const from = hover ?? picked ?? buckets.length;
+    if (e.key === "ArrowLeft" || e.key === "ArrowRight") setHover(Math.min(Math.max(from + (e.key === "ArrowLeft" ? -1 : 1), 0), buckets.length - 1));
+    else if (e.key === "Home" || e.key === "End") setHover(e.key === "Home" ? 0 : buckets.length - 1);
+    else if ((e.key === "Enter" || e.key === " ") && hover !== null) pick(hover);
+    else if (e.key === "Escape" && picked !== null) onPick?.(null);
+    else return;
+    e.preventDefault();
+  };
 
   return (
-    <div className="chart" ref={ref} style={{ height }} onMouseLeave={() => setHover(null)}>
+    <div className={`chart ${onPick ? "pickable" : ""}`} ref={ref} style={{ height }} onMouseLeave={() => setHover(null)}
+      {...(onPick && { tabIndex: 0, role: "group", "aria-roledescription": "chart", onKeyDown: onKey, onBlur: () => setHover(null), "aria-label": "Usage trend. Use the arrow keys to move between periods, Enter to see what used data, Escape to clear." })}>
+      {onPick && (
+        <div className="sr-only" aria-live="polite">
+          {hovered && `${bucketTitle(hovered, report.granularity)}: ${hovered.rx === null ? "not tracked" : `${bytes(bucketTotal(hovered) ?? 0)} used`}${hover === picked ? ", selected" : ""}`}
+        </div>
+      )}
       {width > 0 && (
-        <svg width={width} height={height} onMouseMove={onMove} role="img" aria-label={`Download and upload trend, ${report.granularity} totals in ${unit}`}>
+        <svg width={width} height={height} onMouseMove={onMove} onClick={onPick && (() => pick(hover))} role="img" aria-label={`Download and upload trend, ${report.granularity} totals in ${unit}`}>
           <defs>
             {series.map((s) => (
               <linearGradient key={s.key} id={`fill-${s.key}`} x1="0" x2="0" y1="0" y2="1">
@@ -247,6 +270,7 @@ export function TrendChart({ report, show, height = 280 }: { report: Report; sho
               <text x={left - 12} y={y(t * divisor)} dy="0.32em" textAnchor="end">{number(t)}</text>
             </g>
           ))}
+          {picked !== null && picked < buckets.length && <rect className="pick-band" x={x(picked) - band / 2} y={plotTop} width={band} height={y(0) - plotTop} rx={6} />}
           {series.slice(0, 1).map((s) => segments.map((seg, k) => <path key={`a${k}`} d={area(seg, s.value)} fill={`url(#fill-${s.key})`} />))}
           {series.map((s) =>
             segments.map((seg, k) =>
@@ -288,6 +312,7 @@ export function TrendChart({ report, show, height = 280 }: { report: Report; sho
               <div className="t-row"><span className="swatch" style={{ background: "var(--upload)", borderRadius: "50%" }} />Upload<span className="v num">{bytes(hovered.tx ?? 0)}</span></div>
               <div className="t-row t-total">Total<span className="v num">{bytes(bucketTotal(hovered) ?? 0)}</span></div>
               {hovered.estimated > 0 && <div className="t-note">Includes {bytes(hovered.estimated)} estimated</div>}
+              {onPick && <div className="t-note">{hover === picked ? "Click to clear" : "Click to see what used it"}</div>}
             </>
           )}
         </div>

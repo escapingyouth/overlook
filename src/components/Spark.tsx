@@ -1,5 +1,5 @@
 
-export function Donut({ parts, size = 184, thickness = 18, children }: { parts: { value: number; color: string; label: string }[]; size?: number; thickness?: number; children?: React.ReactNode }) {
+export function Donut({ parts, size = 184, thickness = 18, children }: Readonly<{ parts: { value: number; color: string; label: string }[]; size?: number; thickness?: number; children?: React.ReactNode }>) {
   const r = (size - thickness) / 2;
   const c = 2 * Math.PI * r;
   const total = parts.reduce((s, p) => s + p.value, 0);

@@ -1,16 +1,18 @@
 import { createContext, useContext, useState } from "react";
-import { GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useLive, useReport } from "../lib/api";
+import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
+import { api, dismissHotspot, displayName, isHotspot, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
+import { CapsCard } from "./Caps";
+import { PickedSpan, TopApps } from "./TopApps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy }: {
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onNewCap, onEnablePerApp }: Readonly<{
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -18,13 +20,27 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onSelect: (id: number) => void;
   onRename: (n: Network) => void;
   onAccuracy: () => void;
-}) {
+  onCaps: () => void;
+  onNewCap: (networkId: number) => void;
+  onEnablePerApp: () => void;
+}>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
+  // Keyed by start time, not index, so the pick survives the 24-hour window sliding on refresh.
+  const [pickedAt, setPickedAt] = useState<number | null>(null);
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
+  // Dismissal lives in localStorage; this re-renders the header and callout when it changes.
+  const [, setDismissals] = useState(0);
   const report = useReport(network?.id ?? null, range, granularity[range], status.firstCoveredHour);
   if (!report) return null;
   const info = rangeInfo(range);
+  const pickedIndex = report.buckets.findIndex((b) => b.start.getTime() === pickedAt);
+  const picked = pickedIndex >= 0 ? report.buckets[pickedIndex] : null;
+  const span: PickedSpan | null = picked && { hours: bucketHours(picked), title: bucketTitle(picked, report.granularity) };
+  const pick = (i: number | null) => {
+    setPickedAt(i === null ? null : report.buckets[i].start.getTime());
+    if (i !== null) requestAnimationFrame(() => document.getElementById("top-apps")?.scrollIntoView({ block: "nearest" }));
+  };
 
   return (
     <ReportContext.Provider value={report}>
@@ -39,6 +55,12 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
 
+      <HotspotCallout status={status} network={network} onNewCap={onNewCap} onDismiss={(id) => {
+        dismissHotspot(id);
+        setDismissals((n) => n + 1);
+      }} />
+      <CapsCard status={status} network={network} onManage={onCaps} />
+
       <div className="main-grid">
         <SplitDonut report={report} />
         <section className="card">
@@ -50,7 +72,10 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </div>
             </div>
             {info.granularities.length > 1 && (
-              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => setGranularity({ ...granularity, [range]: g })}
+              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => {
+                  setGranularity({ ...granularity, [range]: g });
+                  setPickedAt(null);
+                }}
                 options={info.granularities.map((g) => ({ value: g, label: GRANULARITY_LABEL[g] }))} />
             )}
           </div>
@@ -62,11 +87,16 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </button>
             ))}
           </div>
-          <TrendChart report={report} show={show} height={narrow ? 240 : 290} />
+          <TrendChart report={report} show={show} height={narrow ? 240 : 290} picked={picked ? pickedIndex : null} onPick={pick} />
         </section>
       </div>
 
-      {network ? <DaysTable report={report} /> : <NetworksTable status={status} report={report} onSelect={onSelect} />}
+      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp}
+        span={span} onClear={() => setPickedAt(null)} />
+
+      {network ? <DaysTable report={report} /> : (
+        <NetworksTable status={status} report={report} onSelect={onSelect} span={span} />
+      )}
 
       <div className={`row ${network ? "three" : ""}`}>
         {range !== "day" && (
@@ -89,22 +119,48 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   );
 }
 
+/** Phone plans run out fast: offer a cap when the network in view is a hotspot nothing caps yet. */
+function HotspotCallout({ status, network, onNewCap, onDismiss }: Readonly<{
+  status: Status;
+  network: Network | null;
+  onNewCap: (id: number) => void;
+  onDismiss: (id: number) => void;
+}>) {
+  const caps = useCaps();
+  const id = network?.id ?? status.live.primary;
+  const active = status.live.active.find((a) => a.networkId === id);
+  const n = status.networks.find((x) => x.id === id);
+  if (!isHotspot(active) || !n || !caps || caps.some((c) => c.networkId === id && c.appId === null)) return null;
+  return (
+    <section className="callout" aria-label="Phone hotspot">
+      <span className="icon-tile lg"><Icon name="phone" size={18} /></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="callout-title">{network ? "This looks like a phone hotspot" : `You're on a phone hotspot · ${displayName(n)}`}</div>
+        <div className="muted" style={{ fontSize: 12.5 }}>Mobile data runs out fast. Set a cap to get alerts, or a hard stop, before the plan does.</div>
+      </div>
+      <button className="btn ghost" onClick={() => onDismiss(n.id)}>Not a hotspot</button>
+      <button className="btn primary" onClick={() => onNewCap(n.id)}>Set a cap</button>
+    </section>
+  );
+}
+
 function weekOrder() {
   const first = weekStart();
   return Array.from({ length: 7 }, (_, i) => (first + i) % 7);
 }
 
-function Peak({ report }: { report: Report }) {
+function Peak({ report }: Readonly<{ report: Report }>) {
   const peak = report.buckets.reduce<Report["buckets"][number] | null>(
     (m, b) => ((b.rx ?? 0) + (b.tx ?? 0) > (m ? (m.rx ?? 0) + (m.tx ?? 0) : 0) ? b : m), null);
   return <>{peak ? `Peak ${bytes((peak.rx ?? 0) + (peak.tx ?? 0))} · ${bucketTitle(peak, report.granularity)}` : "No usage yet"}</>;
 }
 
-function PageHead({ status, network }: { status: Status; network: Network | null }) {
+function PageHead({ status, network }: Readonly<{ status: Status; network: Network | null }>) {
   const active = network ? status.live.active.find((a) => a.networkId === network.id) : status.live.active.find((a) => a.networkId === status.live.primary);
   const current = status.networks.find((n) => n.id === status.live.primary);
   const live = network ? !!active : !!current;
-  const showRate = status.live.rate && (network ? status.live.primary === network.id : true);
+  const now = useRate(status.live.rate);
+  const showRate = now && (network ? status.live.primary === network.id : true);
   return (
     <div className="page-head">
       <div style={{ minWidth: 0 }}>
@@ -112,28 +168,28 @@ function PageHead({ status, network }: { status: Status; network: Network | null
         <div className="muted" style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
           <span className={`dot ${live ? "" : "off"}`} />
           {network
-            ? active ? `Connected · ${active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
+            ? active ? `Connected · ${isHotspot(active) ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
             : current ? `${status.networks.length} networks · on ${displayName(current)}` : `${status.networks.length} networks · offline`}
         </div>
       </div>
       {showRate && (
-        <span className="rate num" title={`Average over the last ${status.sampleInterval} seconds`}>
-          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(status.live.rate![0])}</span>
-          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(status.live.rate![1])}</span>
+        <span className="rate num" title="Updated every second">
+          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(now![0])}</span>
+          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(now![1])}</span>
         </span>
       )}
     </div>
   );
 }
 
-function DeltaPill({ value, previous, report }: { value: number | null; previous: number | null; report: Report }) {
+function DeltaPill({ value, previous, report }: Readonly<{ value: number | null; previous: number | null; report: Report }>) {
   if (value === null || previous === null || previous === 0) return null;
   const change = (value - previous) / previous;
   const text = Math.abs(change) < 0.0005 ? "±0%" : `${change > 0 ? "+" : "−"}${percent(Math.abs(change))}`;
   return <span className="delta-pill num" title={`vs ${bytes(previous)} in the ${rangeInfo(report.range).previous}`}>{text}</span>;
 }
 
-function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title: string; value: number | null; previous: number | null; note?: string }) {
+function KpiCard({ icon, title, value, previous, note }: Readonly<{ icon: IconName; title: string; value: number | null; previous: number | null; note?: string }>) {
   const report = useReportContext();
   return (
     <section className="kpi-card">
@@ -150,13 +206,13 @@ function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title
   );
 }
 
-function SplitDonut({ report }: { report: Report }) {
+function SplitDonut({ report }: Readonly<{ report: Report }>) {
   const [v, unit] = scaled(report.total);
   const item = (icon: IconName, label: string, value: number, color: string) => (
     <div className="result">
       <span className="icon-tile lg" style={{ color }}><Icon name={icon} size={18} /></span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6 }}>
           <span className="num" style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>{bytes(value)}</span>
           <span className="faint num" style={{ fontSize: 12 }}>{report.total ? percent(value / report.total) : "—"}</span>
         </div>
@@ -190,8 +246,9 @@ function SplitDonut({ report }: { report: Report }) {
   );
 }
 
-function NetworksTable({ status, report, onSelect }: { status: Status; report: Report; onSelect: (id: number) => void }) {
-  const totals = useLive(() => api.totals(hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1), [report.start.getTime()]) ?? [];
+function NetworksTable({ status, report, onSelect, span }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void; span: PickedSpan | null }>) {
+  const [from, to] = span?.hours ?? [hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1];
+  const totals = useLive(() => api.totals(from, to), [from, to]) ?? [];
   const rows = status.networks
     .map((n) => {
       const t = totals.find((t) => t.networkId === n.id);
@@ -200,7 +257,7 @@ function NetworksTable({ status, report, onSelect }: { status: Status; report: R
     .sort((a, b) => b.rx + b.tx - (a.rx + a.tx));
   return (
     <section className="panel">
-      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{rangeInfo(report.range).title}</span></div>
+      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{span?.title ?? rangeInfo(report.range).title}</span></div>
       <div style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>
@@ -228,7 +285,7 @@ function NetworksTable({ status, report, onSelect }: { status: Status; report: R
   );
 }
 
-function DaysTable({ report }: { report: Report }) {
+function DaysTable({ report }: Readonly<{ report: Report }>) {
   const days = [...report.days].reverse().slice(0, 14);
   const today = new Date().toDateString();
   return (
@@ -267,7 +324,7 @@ function DaysTable({ report }: { report: Report }) {
   );
 }
 
-function HighlightsCard({ report }: { report: Report }) {
+function HighlightsCard({ report }: Readonly<{ report: Report }>) {
   const day = (d: Date) => fmtDate(d, { weekday: "short", month: "short", day: "numeric" });
   const item = (label: string, value: number | null, detail?: string) => (
     <div className="list-row">
@@ -286,7 +343,7 @@ function HighlightsCard({ report }: { report: Report }) {
   );
 }
 
-function NetworkCard({ network, status, onRename }: { network: Network; status: Status; onRename: (n: Network) => void }) {
+function NetworkCard({ network, status, onRename }: Readonly<{ network: Network; status: Status; onRename: (n: Network) => void }>) {
   const live = status.live.active.some((a) => a.networkId === network.id);
   const when = (s: number) => fmtDate(new Date(s * 1000), { dateStyle: "medium", timeStyle: "short" });
   const item = (label: string, value: string, help?: string) => (
@@ -306,7 +363,7 @@ function NetworkCard({ network, status, onRename }: { network: Network; status: 
   );
 }
 
-function Footnote({ report, network, onAccuracy }: { report: Report; network: Network | null; onAccuracy: () => void }) {
+function Footnote({ report, network, onAccuracy }: Readonly<{ report: Report; network: Network | null; onAccuracy: () => void }>) {
   const dropped = useLive(() => api.droppedBytes(report.start.getTime() / 1000), [report.start.getTime()]) ?? 0;
   const parts = ["Measured from interface byte counters, including local-network traffic."];
   if (report.estimated > 0) parts.push(`${bytes(report.estimated)} is estimated (attributed across a network switch or a sleep/restart gap).`);

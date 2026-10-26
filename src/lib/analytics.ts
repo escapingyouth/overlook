@@ -104,6 +104,9 @@ export interface Bucket {
 
 export const bucketTotal = (b: Bucket) => (b.rx === null ? null : b.rx + (b.tx ?? 0));
 
+/** The bucket as an inclusive hour span, the form the backend queries take. */
+export const bucketHours = (b: Bucket): [number, number] => [hourOf(b.start.getTime()), hourOf(b.end.getTime() - 1)];
+
 export interface DayUsage {
   day: Date;
   total: number;
@@ -277,4 +280,24 @@ export function buildReport(opts: {
     hourOfDay,
     weekday,
   };
+}
+
+export interface CapForecast {
+  /** Share of the cap used so far; can exceed 1. */
+  share: number;
+  /** Share of the period that has passed. */
+  elapsed: number;
+  /** Usage by the reset at the current pace, or null when it's too early to say. */
+  projected: number | null;
+  /** When the cap runs out at the current pace (epoch seconds), if before the reset. */
+  runsOutAt: number | null;
+}
+
+export function capForecast(c: { used: number; limitBytes: number; start: number; end: number }, now = Date.now() / 1000): CapForecast {
+  const elapsed = Math.min(Math.max((now - c.start) / Math.max(c.end - c.start, 1), 0), 1);
+  const share = c.used / Math.max(c.limitBytes, 1);
+  // Extrapolating from the first few hours of a month is noise.
+  const projected = elapsed >= 0.1 && c.used > 0 ? c.used / elapsed : null;
+  const runsOutAt = projected !== null && projected > c.limitBytes && share < 1 ? c.start + (c.limitBytes / c.used) * (now - c.start) : null;
+  return { share, elapsed, projected, runsOutAt };
 }
