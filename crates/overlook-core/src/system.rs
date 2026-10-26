@@ -257,10 +257,26 @@ pub const SNAPSHOT_PATH: &str = "/run/overlook-helper/counters.json";
 #[cfg(target_os = "windows")]
 pub const SNAPSHOT_PATH: &str = r"C:\ProgramData\Overlook\counters.json";
 
+// ponytail: one-shot `nettop -L 1` only sees open flows, so bytes of connections that close between samples are lost.
+// A long-lived `nettop -d` reader would catch them, but on macOS 27.2 a resident nettop burns ~1.4 cores even at -s 30;
+// upgrade by reading NetworkStatistics directly.
 #[cfg(target_os = "macos")]
 pub fn process_snapshot() -> Result<crate::apps::Snapshot, String> {
     use crate::apps::{parse_nettop, ProcSample, Snapshot};
-    let out = Command::new("nettop").args(["-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"]).output().map_err(|e| format!("nettop failed: {e}"))?;
+    let child = Command::new("nettop")
+        .args(["-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map_err(|e| format!("nettop failed: {e}"))?;
+    let pid = child.id() as i32;
+    // Runs under the collector lock, so a hung nettop must not hang the app.
+    let (send, recv) = std::sync::mpsc::channel();
+    std::thread::spawn(move || send.send(child.wait_with_output()).ok());
+    let Ok(Ok(out)) = recv.recv_timeout(std::time::Duration::from_secs(5)) else {
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+        return Err("nettop didn't respond".into());
+    };
     if !out.status.success() {
         return Err("nettop failed".into());
     }
