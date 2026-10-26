@@ -20,6 +20,9 @@ pub struct Cap {
     pub alerts: Vec<u32>,
     pub action: String,
     pub throttle_kbps: i64,
+    /// Counts one app's usage instead of the network's. Alerts only; apps can't be blocked or throttled.
+    #[serde(default)]
+    pub app_id: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -30,6 +33,7 @@ pub struct CapUsage {
     pub used: i64,
     pub start: f64,
     pub end: f64,
+    pub app_name: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -77,8 +81,13 @@ pub fn usage(store: &Store, now: f64) -> Vec<CapUsage> {
         .into_iter()
         .map(|cap| {
             let (start, end) = period_bounds(&Local, &cap.period, cap.reset, now);
-            let used = store.hours(cap.network_id, hour_of(start), hour_of(now)).iter().map(|r| r.rx + r.tx).sum();
-            CapUsage { cap, used, start, end }
+            let (from, to) = (hour_of(start), hour_of(now));
+            let used = match cap.app_id {
+                Some(app) => store.app_bytes(app, cap.network_id, from, to),
+                None => store.hours(cap.network_id, from, to).iter().map(|r| r.rx + r.tx).sum(),
+            };
+            let app_name = cap.app_id.and_then(|id| store.app_name(id));
+            CapUsage { cap, used, start, end, app_name }
         })
         .collect()
 }
@@ -100,6 +109,11 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
     let mut v = Verdict::default();
     let names: HashMap<i64, String> = store.networks().into_iter().map(|n| (n.id, n.custom_name.unwrap_or(n.name))).collect();
     let name = |id: Option<i64>| id.map_or("All networks".to_string(), |id| names.get(&id).cloned().unwrap_or("A network".into()));
+    let scope = |u: &CapUsage| match (&u.app_name, u.cap.network_id) {
+        (Some(app), Some(_)) => format!("{app} on {}", name(u.cap.network_id)),
+        (Some(app), None) => app.clone(),
+        (None, _) => name(u.cap.network_id),
+    };
 
     for u in usage(store, now) {
         let cap = &u.cap;
@@ -114,11 +128,11 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
                 _ => "",
             };
             v.notices.push(Notice {
-                title: format!("{}: {top}% of {} cap used", name(cap.network_id), period_word(&cap.period)),
+                title: format!("{}: {top}% of {} cap used", scope(&u), period_word(&cap.period)),
                 body: format!("{} of {} used. Resets in {days} day{}.{then}", gb(u.used), gb(cap.limit_bytes), if days == 1 { "" } else { "s" }),
             });
         }
-        if out {
+        if out && cap.app_id.is_none() {
             for a in active.iter().filter(|a| cap.network_id.map_or(true, |id| id == a.network_id)) {
                 match cap.action.as_str() {
                     "block" => v.block.push((a.interface.clone(), a.kind.clone())),
@@ -181,7 +195,7 @@ mod tests {
         let id = s.resolve_network(&net, now).unwrap();
         let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
         s.add(&UsageDelta { network_id: id, rx: 850_000_000, tx: 0, estimated: false, at: now });
-        s.save_cap(&Cap { id: 0, network_id: Some(id), period: "day".into(), reset: 0, limit_bytes: 1_000_000_000, alerts: vec![80, 100], action: "block".into(), throttle_kbps: 1000 });
+        s.save_cap(&Cap { id: 0, network_id: Some(id), period: "day".into(), reset: 0, limit_bytes: 1_000_000_000, alerts: vec![80, 100], action: "block".into(), throttle_kbps: 1000, app_id: None });
 
         let v = evaluate(&s, &active, now);
         assert_eq!(v.notices.len(), 1);
@@ -193,6 +207,59 @@ mod tests {
         let v = evaluate(&s, &active, now);
         assert!(v.notices[0].title.contains("100%"));
         assert_eq!(v.block, vec![("en0".to_string(), "wifi".to_string())]);
+    }
+
+    #[test] fn app_caps_count_one_app_and_only_alert() {
+        let s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, now).unwrap();
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let dropbox = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
+        let other = s.insert_app("/Applications/Safari.app", "Safari", None);
+        s.add(&UsageDelta { network_id: id, rx: 3_000_000_000, tx: 0, estimated: false, at: now });
+        s.add_app_usage(id, other, now, 2_000_000_000, 0);
+        s.add_app_usage(id, dropbox, now, 600_000_000, 500_000_000);
+        // Even if a stale client sends "block", an app cap must never disconnect the network.
+        s.save_cap(&Cap { id: 0, network_id: Some(id), period: "day".into(), reset: 0, limit_bytes: 1_000_000_000, alerts: vec![100], action: "block".into(), throttle_kbps: 1000, app_id: Some(dropbox) });
+
+        let u = &usage(&s, now)[0];
+        assert_eq!((u.used, u.app_name.as_deref(), u.cap.action.as_str()), (1_100_000_000, Some("Dropbox"), "none"));
+        let v = evaluate(&s, &active, now);
+        assert_eq!(v.notices[0].title, "Dropbox on Hotspot: 100% of daily cap used");
+        assert!(v.block.is_empty() && v.throttle.is_empty());
+    }
+
+    #[test] fn old_databases_gain_app_caps() {
+        let path = std::env::temp_dir().join(format!("overlook-migrate-{}.sqlite", std::process::id()));
+        rusqlite::Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE caps (id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
+             limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL);
+             INSERT INTO caps VALUES (1, NULL, 'day', 0, 100, '80', 'none', 1000);").unwrap();
+        let caps = Store::open(&path.to_string_lossy()).unwrap().caps();
+        Store::open(&path.to_string_lossy()).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!((caps.len(), caps[0].app_id), (1, None));
+    }
+
+    #[test] fn a_reused_cap_id_alerts_again() {
+        let mut s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, now).unwrap();
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
+        s.add_app_usage(id, app, now, 900, 0);
+        let cap = Cap { id: 0, network_id: None, period: "day".into(), reset: 0, limit_bytes: 1000, alerts: vec![80], action: "none".into(), throttle_kbps: 1000, app_id: Some(app) };
+        s.save_cap(&cap);
+        assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
+
+        s.delete_app_data();
+        let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
+        s.add_app_usage(id, app, now, 900, 0);
+        s.save_cap(&Cap { app_id: Some(app), ..cap });
+        assert_eq!(s.caps()[0].id, 1, "SQLite reuses the deleted id");
+        assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
     }
 
     #[test] fn unusual_upload_alerts_once_per_hour() {

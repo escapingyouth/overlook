@@ -2,6 +2,7 @@ mod helper;
 
 use serde::Serialize;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use overlook_core::apps::AppTracker;
@@ -19,6 +20,7 @@ use tauri_plugin_positioner::{Position, WindowExt};
 struct AppState {
     collector: Mutex<Collector>,
     db_path: PathBuf,
+    tray_rate: AtomicBool,
 }
 
 #[derive(Serialize)]
@@ -33,6 +35,7 @@ struct Status {
     retention_months: i64,
     upload_alerts: bool,
     can_throttle: bool,
+    tray_rate: bool,
 }
 
 #[derive(Serialize)]
@@ -58,6 +61,7 @@ fn status(state: State<AppState>) -> Status {
         retention_months: retention(&c.store),
         upload_alerts: c.store.meta("upload_alerts").as_deref() != Some("0"),
         can_throttle: enforce::CAN_THROTTLE,
+        tray_rate: state.tray_rate.load(Ordering::Relaxed),
     }
 }
 
@@ -156,6 +160,13 @@ fn set_upload_alerts(app: AppHandle, state: State<AppState>, on: bool) {
 }
 
 #[tauri::command]
+fn set_tray_rate(app: AppHandle, state: State<AppState>, on: bool) {
+    state.collector.lock().unwrap().store.set_meta("tray_rate", if on { "1" } else { "0" });
+    state.tray_rate.store(on, Ordering::Relaxed);
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
 fn request_wifi_names(app: AppHandle) {
     app.run_on_main_thread(system::request_wifi_names).ok();
 }
@@ -189,6 +200,12 @@ fn show_main(app: AppHandle) {
 #[tauri::command]
 fn quit(app: AppHandle) {
     app.exit(0);
+}
+
+/// Bytes per second in a few characters, decimal units like the UI.
+fn short_rate(b: f64) -> String {
+    let (v, unit) = [(1e9, "G"), (1e6, "M"), (1e3, "K")].into_iter().find(|&(d, _)| b >= d).map_or((0.0, "K"), |(d, u)| (b / d, u));
+    if v >= 10.0 || v == 0.0 { format!("{v:.0}{unit}") } else { format!("{v:.1}{unit}") }
 }
 
 fn prune(store: &mut Store) {
@@ -247,9 +264,10 @@ pub fn run() {
             let mut store = Store::open(&db_path.to_string_lossy())?;
             prune(&mut store);
             let shaped = store.meta("throttled").unwrap_or_default();
+            let tray_rate = AtomicBool::new(store.meta("tray_rate").as_deref() == Some("1"));
             let mut collector = Collector::new(store);
             collector.tick();
-            app.manage(AppState { collector: Mutex::new(collector), db_path });
+            app.manage(AppState { collector: Mutex::new(collector), db_path, tray_rate });
 
             // Enforcement can sit on an admin password prompt, so it gets its own thread and only acts on the latest verdict.
             let (enforce_tx, enforce_rx) = mpsc::channel::<Verdict>();
@@ -289,23 +307,33 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut last: Option<(String, system::Counter, std::time::Instant)> = None;
+                let mut shown: Option<String> = None;
                 loop {
                     std::thread::sleep(Duration::from_secs(1));
+                    let state = handle.state::<AppState>();
                     let primary = {
-                        let state = handle.state::<AppState>();
                         let c = state.collector.lock().unwrap();
                         c.status.active.iter().find(|a| Some(a.network_id) == c.status.primary).map(|a| a.interface.clone())
                     };
-                    let Some(name) = primary else { last = None; continue };
-                    let Some(now) = system::counter(&name) else { last = None; continue };
-                    let at = std::time::Instant::now();
-                    if let Some((prev_name, prev, prev_at)) = &last {
-                        let secs = at.duration_since(*prev_at).as_secs_f64();
-                        if *prev_name == name && now.rx >= prev.rx && now.tx >= prev.tx && secs > 0.0 {
-                            handle.emit("overlook://rate", ((now.rx - prev.rx) as f64 / secs, (now.tx - prev.tx) as f64 / secs)).ok();
+                    let sample = primary.and_then(|name| system::counter(&name).map(|now| (name, now, std::time::Instant::now())));
+                    let rate = match (&last, &sample) {
+                        (Some((prev_name, prev, prev_at)), Some((name, now, at))) => {
+                            let secs = at.duration_since(*prev_at).as_secs_f64();
+                            (prev_name == name && now.rx >= prev.rx && now.tx >= prev.tx && secs > 0.0)
+                                .then(|| ((now.rx - prev.rx) as f64 / secs, (now.tx - prev.tx) as f64 / secs))
                         }
+                        _ => None,
+                    };
+                    last = sample;
+                    if let Some(r) = rate {
+                        handle.emit("overlook://rate", r).ok();
                     }
-                    last = Some((name, now, at));
+                    // Menu-bar text (macOS) / indicator label (Linux); Windows trays have no title.
+                    let title = if state.tray_rate.load(Ordering::Relaxed) { rate.map(|(rx, tx)| format!("↓{} ↑{}", short_rate(rx), short_rate(tx))) } else { None };
+                    // Only remember what actually reached the tray, so a failed update retries next second.
+                    if title != shown && handle.tray_by_id("overlook").is_some_and(|t| t.set_title(title.as_deref()).is_ok()) {
+                        shown = title;
+                    }
                 }
             });
 
@@ -357,7 +385,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, usage, totals, apps, set_per_app, delete_app_data, dropped_bytes, rename_network, delete_network, delete_all,
-            set_retention, caps, save_cap, delete_cap, set_upload_alerts, request_wifi_names, reveal_data, save_export, show_main, quit
+            set_retention, caps, save_cap, delete_cap, set_upload_alerts, set_tray_rate, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Overlook");
@@ -369,4 +397,14 @@ pub fn run() {
         }
         let _ = (app, event);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test] fn short_rate_stays_compact() {
+        let cases = [(0.0, "0K"), (400.0, "0K"), (1_500.0, "1.5K"), (12_345.0, "12K"), (2_340_000.0, "2.3M"), (1.2e9, "1.2G")];
+        for (b, s) in cases {
+            assert_eq!(super::short_rate(b), s);
+        }
+    }
 }

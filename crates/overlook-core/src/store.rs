@@ -106,8 +106,12 @@ impl Store {
              CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS caps (
                  id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
-                 limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL);",
+                 limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL, app_id INTEGER);",
         )?;
+        // Databases from before per-app caps.
+        if db.prepare("SELECT app_id FROM caps LIMIT 0").is_err() {
+            db.execute("ALTER TABLE caps ADD COLUMN app_id INTEGER", [])?;
+        }
         Ok(Store { db })
     }
 
@@ -170,6 +174,7 @@ impl Store {
             s.db.execute("DELETE FROM app_usage WHERE network_id = ?", [id]).ok();
             s.db.execute("DELETE FROM networks WHERE id = ?", [id]).ok();
             s.db.execute("DELETE FROM caps WHERE network_id = ?", [id]).ok();
+            s.forget_deleted_cap_alerts();
             s.db.execute("UPDATE baselines SET network_id = NULL WHERE network_id = ?", [id]).ok();
         });
     }
@@ -276,8 +281,24 @@ impl Store {
         AppsReport { apps, covered_rx, covered_tx, since_hour }
     }
 
+    pub fn app_bytes(&self, app_id: i64, network: Option<i64>, from_hour: i64, to_hour: i64) -> i64 {
+        self.db
+            .query_row(
+                "SELECT COALESCE(SUM(rx + tx), 0) FROM app_usage WHERE app_id = ?1 AND hour BETWEEN ?2 AND ?3 AND (network_id = ?4 OR ?4 IS NULL)",
+                params![app_id, from_hour, to_hour, network],
+                |r| r.get(0),
+            )
+            .unwrap_or(0)
+    }
+
+    pub fn app_name(&self, id: i64) -> Option<String> {
+        self.db.query_row("SELECT name FROM apps WHERE id = ?", [id], |r| r.get(0)).optional().ok().flatten()
+    }
+
     pub fn delete_app_data(&mut self) {
         self.transaction(|s| {
+            s.db.execute("DELETE FROM caps WHERE app_id IS NOT NULL", []).ok();
+            s.forget_deleted_cap_alerts();
             for table in ["app_usage", "app_coverage", "apps"] {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
@@ -341,12 +362,13 @@ impl Store {
     }
 
     pub fn caps(&self) -> Vec<Cap> {
-        let mut s = self.db.prepare("SELECT id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps FROM caps ORDER BY id").unwrap();
+        let mut s = self.db.prepare("SELECT id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps, app_id FROM caps ORDER BY id").unwrap();
         s.query_map([], |r| {
             let alerts: String = r.get(5)?;
             Ok(Cap {
                 id: r.get(0)?, network_id: r.get(1)?, period: r.get(2)?, reset: r.get(3)?, limit_bytes: r.get(4)?,
                 alerts: alerts.split(',').filter_map(|a| a.parse().ok()).collect(), action: r.get(6)?, throttle_kbps: r.get(7)?,
+                app_id: r.get(8)?,
             })
         })
         .unwrap()
@@ -357,12 +379,13 @@ impl Store {
     pub fn save_cap(&self, c: &Cap) {
         let alerts = c.alerts.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
         let id = (c.id > 0).then_some(c.id);
+        let action = if c.app_id.is_some() { "none" } else { c.action.as_str() };
         // A changed limit or threshold should be able to alert again this period.
         self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{}:%", c.id)]).ok();
         self.db
             .execute(
-                "INSERT OR REPLACE INTO caps (id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                params![id, c.network_id, c.period, c.reset, c.limit_bytes.max(1), alerts, c.action, c.throttle_kbps.max(64)],
+                "INSERT OR REPLACE INTO caps (id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps, app_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                params![id, c.network_id, c.period, c.reset, c.limit_bytes.max(1), alerts, action, c.throttle_kbps.max(64), c.app_id],
             )
             .ok();
     }
@@ -370,6 +393,13 @@ impl Store {
     pub fn delete_cap(&self, id: i64) {
         self.db.execute("DELETE FROM caps WHERE id = ?", [id]).ok();
         self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{id}:%")]).ok();
+    }
+
+    /// SQLite reuses a deleted cap's id, so its sent-alert keys would silence the next cap's alerts.
+    fn forget_deleted_cap_alerts(&self) {
+        self.db
+            .execute("DELETE FROM meta WHERE key LIKE 'sent:cap:%' AND NOT EXISTS (SELECT 1 FROM caps WHERE meta.key LIKE 'sent:cap:' || caps.id || ':%')", [])
+            .ok();
     }
 
     pub fn prune(&mut self, before: f64) {
@@ -388,7 +418,8 @@ impl Store {
             for table in ["usage", "coverage", "app_usage", "app_coverage", "apps", "networks", "baselines", "dropped"] {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
-            s.db.execute("DELETE FROM caps WHERE network_id IS NOT NULL", []).ok();
+            s.db.execute("DELETE FROM caps WHERE network_id IS NOT NULL OR app_id IS NOT NULL", []).ok();
+            s.forget_deleted_cap_alerts();
         });
         self.db.execute_batch("VACUUM").ok();
     }

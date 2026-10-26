@@ -45,10 +45,11 @@ function usage(network: number | null, from: number, to: number) {
   return [...sum.values()].sort((a, b) => a.hour - b.hour);
 }
 
-let caps = [
-  { id: 1, networkId: 3, period: "month", reset: 1, limitBytes: 15e9, alerts: [80, 100], action: "block", throttleKbps: 1000 },
-  { id: 2, networkId: null, period: "month", reset: 12, limitBytes: 1.2e12, alerts: [80, 100], action: "none", throttleKbps: 1000 },
-  { id: 3, networkId: 1, period: "week", reset: 1, limitBytes: 20e9, alerts: [50, 80, 100], action: "throttle", throttleKbps: 1000 },
+let caps: { id: number; networkId: number | null; period: string; reset: number; limitBytes: number; alerts: number[]; action: string; throttleKbps: number; appId: number | null }[] = [
+  { id: 1, networkId: 3, period: "month", reset: 1, limitBytes: 15e9, alerts: [80, 100], action: "block", throttleKbps: 1000, appId: null },
+  { id: 2, networkId: null, period: "month", reset: 12, limitBytes: 1.2e12, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null },
+  { id: 3, networkId: 1, period: "week", reset: 1, limitBytes: 20e9, alerts: [50, 80, 100], action: "throttle", throttleKbps: 1000, appId: null },
+  { id: 4, networkId: null, period: "week", reset: 1, limitBytes: 40e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: 2 },
 ];
 // Extra usage on top of the synthetic history so the mock shows a cap that's used up and one that's close.
 const EXTRA_USED: Record<number, number> = { 1: 15.6e9, 3: 7e9 };
@@ -71,6 +72,7 @@ const params = new URLSearchParams(location.search);
 const appsMode = params.get("apps");
 const platform = params.get("platform") ?? "macos";
 let perAppOn = appsMode !== "off" && appsMode !== "deny";
+let trayRate = false;
 
 // name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
 const appDefs: [string, string, number, number][] = [
@@ -109,6 +111,7 @@ mockIPC((cmd, args: any) => {
         retentionMonths: 24,
         uploadAlerts: true,
         canThrottle: params.get("platform") !== "windows",
+        trayRate,
       };
     case "usage":
       return { rows: usage(args.network, args.fromHour, args.toHour), coverage: coverage.filter(([h]) => h >= args.fromHour && h <= args.toHour) };
@@ -120,9 +123,17 @@ mockIPC((cmd, args: any) => {
     case "caps":
       return caps.map((c) => {
         const [start, end] = periodBounds(c.period, c.reset);
-        return { ...c, used: sumUsed(c.networkId, Math.floor(start.getTime() / HOUR)) + (EXTRA_USED[c.id] ?? 0), start: start.getTime() / 1000, end: end.getTime() / 1000 };
+        const from = Math.floor(start.getTime() / HOUR);
+        const app = c.appId === null ? undefined : appsReport(c.networkId, from, nowHour).apps.find((a) => a.id === c.appId);
+        const used = c.appId === null ? sumUsed(c.networkId, from) + (EXTRA_USED[c.id] ?? 0) : (app?.rx ?? 0) + (app?.tx ?? 0);
+        return { ...c, used, start: start.getTime() / 1000, end: end.getTime() / 1000, appName: app?.name ?? null };
       });
+    case "set_tray_rate":
+      trayRate = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
     case "save_cap":
+      if (args.cap.appId !== null) args.cap.action = "none";
       caps = args.cap.id ? caps.map((c) => (c.id === args.cap.id ? args.cap : c)) : [...caps, { ...args.cap, id: Date.now() }];
       setTimeout(() => emit("overlook://changed"));
       return null;

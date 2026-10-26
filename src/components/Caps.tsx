@@ -13,11 +13,14 @@ const SPEEDS = [256, 1000, 5000];
 const kbps = (k: number) => (k >= 1000 ? `${k / 1000} Mbps` : `${k} kbps`);
 const day = (sec: number) => fmtDate(new Date(sec * 1000), { month: "short", day: "numeric" });
 
-export const capScope = (cap: Cap, networks: Network[]) => {
+const networkScope = (cap: Cap, networks: Network[]) => {
   if (cap.networkId === null) return "All networks";
   const n = networks.find((n) => n.id === cap.networkId);
   return n ? displayName(n) : "Removed network";
 };
+
+export const capScope = (cap: CapUsage, networks: Network[]) =>
+  cap.appId === null ? networkScope(cap, networks) : `${cap.appName ?? "Removed app"} · ${networkScope(cap, networks)}`;
 
 /** Caps that apply to a network: its own plus the all-networks ones. Null network = every cap. */
 export const capsFor = (caps: CapUsage[], networkId: number | null) =>
@@ -86,7 +89,7 @@ function CapRow({ cap, networks, onEdit }: Readonly<{ cap: CapUsage; networks: N
   return (
     <div className="cap-row">
       <div className="cap-head">
-        <span className="icon-tile"><Icon name={network ? kindIcon(network.kind) : "grid"} size={16} /></span>
+        <span className="icon-tile"><Icon name={cap.appId !== null ? "app" : network ? kindIcon(network.kind) : "grid"} size={16} /></span>
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="cap-name">{scope}</div>
           <div className="faint" style={{ fontSize: 12 }}>{PERIOD[cap.period]} · resets {day(cap.end)}</div>
@@ -149,7 +152,7 @@ export function CapsPane({ status }: Readonly<{ status: Status }>) {
   const caps = useCaps() ?? [];
   const [editing, setEditing] = useState<Cap | null>(null);
   if (editing) return <CapForm status={status} cap={editing} onDone={() => setEditing(null)} />;
-  const add = () => setEditing({ id: 0, networkId: status.live.primary, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000 });
+  const add = () => setEditing({ id: 0, networkId: status.live.primary, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null });
   return (
     <>
       <h3>Caps & alerts</h3>
@@ -173,7 +176,7 @@ export function CapsPane({ status }: Readonly<{ status: Status }>) {
           <Icon name="plus" size={15} />
           <span>
             <span style={{ display: "block", fontWeight: 550 }}>Add a cap</span>
-            <span className="faint" style={{ fontSize: 11.5 }}>{caps.length ? "Daily, weekly or monthly; for one network or all of them." : "Get alerts before a plan or hotspot runs out of data."}</span>
+            <span className="faint" style={{ fontSize: 11.5 }}>{caps.length ? `Daily, weekly or monthly; for one network or all of them${status.live.perApp.enabled ? ", or a single app" : ""}.` : "Get alerts before a plan or hotspot runs out of data."}</span>
           </span>
         </button>
       </div>
@@ -205,6 +208,11 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
   const limitRef = useRef<HTMLInputElement>(null);
   useEffect(() => limitRef.current?.focus(), []);
   const typical = useTypical(draft.networkId, draft.period);
+  const apps = useLive(() => {
+    const h = hourOf(Date.now());
+    return api.apps(null, h - 90 * 24, h + 1).then((r) => r.apps);
+  }, []);
+  const appName = apps?.find((a) => a.id === draft.appId)?.name ?? (cap as Partial<CapUsage>).appName ?? "Removed app";
   const set = (patch: Partial<Cap>) => setDraft({ ...draft, ...patch });
   const limit = Math.round(Number(amount) * unit);
   const valid = limit > 0;
@@ -225,11 +233,13 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
     setAmount(String(Math.ceil(bytesValue / u / (u === 1e6 ? 100 : 1)) * (u === 1e6 ? 100 : 1)));
   };
   const weekday = (d: number) => fmtDate(new Date(2026, 0, 4 + d), { weekday: "long" });
-  const scope = draft.networkId === null ? "all networks" : displayName(status.networks.find((n) => n.id === draft.networkId)!);
+  const network = draft.networkId === null ? "all networks" : networkScope(draft, status.networks);
+  const scope = draft.appId === null ? network : `${appName} on ${network}`;
+  const appOnly = draft.appId === null ? undefined : "Apps can only alert";
   const choices: { id: Cap["action"]; icon: IconName; title: string; desc: string; disabled?: string }[] = [
     { id: "none", icon: "bell", title: "Alert only", desc: "Just notify me" },
-    { id: "block", icon: "block", title: "Block", desc: status.platform === "linux" ? "Disconnect the network" : "Disconnect Wi-Fi" },
-    { id: "throttle", icon: "gauge", title: "Throttle", desc: "Slow the connection", disabled: status.canThrottle ? undefined : "Not available on Windows" },
+    { id: "block", icon: "block", title: "Block", desc: status.platform === "linux" ? "Disconnect the network" : "Disconnect Wi-Fi", disabled: appOnly },
+    { id: "throttle", icon: "gauge", title: "Throttle", desc: "Slow the connection", disabled: appOnly ?? (status.canThrottle ? undefined : "Not available on Windows") },
   ];
   const actionDetail = {
     none: "You'll get the alerts above and nothing else changes.",
@@ -253,6 +263,16 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
             {status.networks.map((n) => <option key={n.id} value={n.id}>{displayName(n)}</option>)}
           </select>
         </Setting>
+        {(status.live.perApp.enabled || draft.appId !== null) && (
+          <Setting title="App" desc="Count one app's data instead of the whole network's.">
+            <select className="text" style={{ width: 210 }} value={draft.appId ?? ""}
+              onChange={(e) => set(e.target.value ? { appId: Number(e.target.value), action: "none" } : { appId: null })}>
+              <option value="">Any app</option>
+              {draft.appId !== null && !apps?.some((a) => a.id === draft.appId) && <option value={draft.appId}>{appName}</option>}
+              {apps?.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
+            </select>
+          </Setting>
+        )}
         <Setting title="Period">
           <Segmented size="sm" label="Period" value={draft.period} options={(["day", "week", "month"] as const).map((p) => ({ value: p, label: PERIOD[p] }))}
             onChange={(period) => set({ period, reset: period === "week" ? weekStart() : 1 })} />
@@ -276,9 +296,9 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
             <option value={1e6}>MB</option>
             <option value={1e9}>GB</option>
           </select>
-          <span className="muted">{PER[draft.period]} on {scope}</span>
+          <span className="muted">{PER[draft.period]} {draft.appId === null ? "on" : "for"} {scope}</span>
         </div>
-        {typical != null && typical > 0 && (
+        {draft.appId === null && typical != null && typical > 0 && (
           <div className="hint">
             You typically use about <strong className="num">{bytes(typical)}</strong> {PER[draft.period]} here.
             <button type="button" className="link" onClick={() => applyTypical(typical)}>Use that</button>
