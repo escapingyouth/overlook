@@ -12,6 +12,7 @@ type Overlay =
   | { kind: "settings"; tab?: string }
   | { kind: "rename"; network: Network }
   | { kind: "delete"; network: Network }
+  | { kind: "perApp" }
   | null;
 
 export default function App() {
@@ -70,7 +71,8 @@ export default function App() {
           ) : (
             <Dashboard key={`${network?.id}-${range}`} status={status} network={network} range={range} narrow={narrow}
               onSelect={setSelection} onRename={(n) => setOverlay({ kind: "rename", network: n })}
-              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })} />
+              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })}
+              onEnablePerApp={() => setOverlay({ kind: "perApp" })} />
           )}
         </div>
       </main>

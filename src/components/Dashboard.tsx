@@ -6,11 +6,12 @@ import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
+import { TopApps } from "./TopApps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy }: {
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onEnablePerApp }: {
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -18,6 +19,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onSelect: (id: number) => void;
   onRename: (n: Network) => void;
   onAccuracy: () => void;
+  onEnablePerApp: () => void;
 }) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
@@ -65,6 +67,8 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           <TrendChart report={report} show={show} height={narrow ? 240 : 290} />
         </section>
       </div>
+
+      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp} />
 
       {network ? <DaysTable report={report} /> : <NetworksTable status={status} report={report} onSelect={onSelect} />}
 
