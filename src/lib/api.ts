@@ -45,6 +45,7 @@ export const api = {
   setRetention: (months: number) => invoke("set_retention", { months }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),
+  saveExport: (fileName: string, contents: string) => invoke<string>("save_export", { fileName, contents }),
   showMain: () => invoke("show_main"),
   quit: () => invoke("quit"),
 };

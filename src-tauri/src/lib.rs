@@ -104,6 +104,22 @@ fn reveal_data(state: State<AppState>) {
 }
 
 #[tauri::command]
+fn save_export(app: AppHandle, file_name: String, contents: String) -> Result<String, String> {
+    let dir = app.path().download_dir().map_err(|e| e.to_string())?;
+    let name: String = file_name.chars().filter(|c| !matches!(c, '/' | '\\' | ':' | '\0')).collect();
+    let (stem, ext) = name.rsplit_once('.').unwrap_or((&name, "csv"));
+    let mut path = dir.join(&name);
+    let mut n = 2;
+    while path.exists() {
+        path = dir.join(format!("{stem} {n}.{ext}"));
+        n += 1;
+    }
+    std::fs::write(&path, contents).map_err(|e| e.to_string())?;
+    tauri_plugin_opener::reveal_item_in_dir(&path).ok();
+    Ok(path.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
 fn show_main(app: AppHandle) {
     show_main_window(&app);
 }
@@ -221,7 +237,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, usage, totals, dropped_bytes, rename_network, delete_network, delete_all,
-            set_retention, request_wifi_names, reveal_data, show_main, quit
+            set_retention, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Tally");
