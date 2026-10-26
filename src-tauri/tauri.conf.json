@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node scripts/build-helper.mjs && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "npm run build",
+    "beforeBuildCommand": "node scripts/build-helper.mjs && npm run build",
     "frontendDist": "../dist"
   },
   "app": {
