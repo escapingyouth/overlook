@@ -11,9 +11,9 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, per-app, storage (39 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, storage (40 tests)
 cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
-cargo test --workspace                   # everything, including the shell (50 tests)
+cargo test --workspace                   # everything, including the shell (51 tests)
 npm test                              # ranges, buckets, statistics, per-app (18 tests)
 ```
 
@@ -30,7 +30,7 @@ crates/overlook-core   Rust, no UI. Unit-tested.
   system.rs         per-OS counters, boot time, physical-adapter filter, router MAC, Wi-Fi names, permission
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
   apps.rs           per-app snapshot parsing, app keys, delta tracking
-  store.rs          SQLite (hourly buckets; same schema as earlier versions)
+  store.rs          SQLite (hourly buckets; adds apps, app_usage and app_coverage tables for per-app)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
 crates/overlook-helper  Windows (ETW) / Linux (sock_diag) per-app sidecar, run as a service
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
@@ -58,12 +58,35 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 - **Gaps.** A coverage table records when collection was running. Untracked periods render as no bar and no track, never as zero.
 - **VPNs.** Tunnel and virtual adapters are excluded, so VPN traffic is counted once, on the physical adapter that carries it.
 
+### Per-app helper (Windows and Linux)
+Turning per-app tracking on asks for admin rights once and installs a helper that runs as SYSTEM/root and starts at boot, even when Overlook isn't open. Turning per-app tracking off stops and removes it. macOS needs no helper.
+
+| | Windows | Linux |
+|---|---|---|
+| Binary | `%ProgramFiles%\Overlook Helper\` | `/usr/local/libexec/overlook-helper` |
+| Service | `OverlookHelper` | systemd unit `overlook-helper.service` |
+| Snapshot file | `C:\ProgramData\Overlook\counters.json` | `/run/overlook-helper/counters.json` |
+
+Turn per-app tracking off before uninstalling Overlook. If you've already uninstalled it, remove the helper by hand:
+
+```sh
+# Linux
+sudo systemctl disable --now overlook-helper
+sudo rm -f /etc/systemd/system/overlook-helper.service /usr/local/libexec/overlook-helper
+sudo systemctl daemon-reload
+```
+
+```powershell
+# Windows, in an elevated PowerShell
+Stop-Service OverlookHelper -Force; sc.exe delete OverlookHelper
+Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramData\Overlook"
+```
+
 ### Limitations
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
 - Per-app tracking is opt-in and only counts from when it's turned on.
-- On Linux, per-app counts TCP only (UDP/QUIC lands in System) and misses very short-lived connections.
-- Processes that start and exit between samples are missed.
+- On macOS and Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. On Linux, per-app also counts TCP only (UDP/QUIC lands in System).
 - macOS apps whose icon lives only in an asset catalog get a generic icon.
 - Two different networks with the same SSID share one history.
 - Windows doesn't report whether Location access was granted, so if an SSID can't be read the network falls back to its router name.
