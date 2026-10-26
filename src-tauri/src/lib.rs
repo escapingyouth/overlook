@@ -83,6 +83,8 @@ async fn set_per_app(app: AppHandle, state: State<'_, AppState>, enabled: bool) 
         let mut c = state.collector.lock().unwrap();
         c.store.set_meta("per_app", if enabled { "on" } else { "off" });
         c.per_app = enabled;
+        c.status.per_app.enabled = enabled;
+        c.status.per_app.error = None;
         if !enabled {
             c.tracker = AppTracker::default();
         }
