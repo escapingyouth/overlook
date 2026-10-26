@@ -310,6 +310,13 @@ impl Store {
         s.query_map([from_hour, to_hour], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().filter_map(Result::ok).collect()
     }
 
+    /// Hours of per-app collection in a range, partial hours counted by their share.
+    pub fn app_covered_hours(&self, from_hour: i64, to_hour: i64) -> f64 {
+        self.db
+            .query_row("SELECT COALESCE(SUM(seconds), 0) / 3600.0 FROM app_coverage WHERE hour BETWEEN ? AND ?", [from_hour, to_hour], |r| r.get(0))
+            .unwrap_or(0.0)
+    }
+
     pub fn first_covered_hour(&self) -> Option<i64> {
         self.db.query_row("SELECT MIN(hour) FROM coverage", [], |r| r.get(0)).ok().flatten()
     }

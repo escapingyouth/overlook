@@ -73,6 +73,7 @@ const appsMode = params.get("apps");
 const platform = params.get("platform") ?? "macos";
 let perAppOn = appsMode !== "off" && appsMode !== "deny";
 let trayRate = false;
+let weeklySummary = true;
 
 // name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
 const appDefs: [string, string, number, number][] = [
@@ -102,7 +103,8 @@ mockIPC((cmd, args: any) => {
     case "status":
       return {
         networks: params.has("empty") ? [] : networks,
-        live: { active: [{ networkId: 1, interface: "en0", kind: "wifi" }], primary: 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
+        live: { active: [params.has("hotspot") ? { networkId: 3, interface: "en0", kind: "wifi", hotspot: true } : { networkId: 1, interface: "en0", kind: "wifi", hotspot: false }],
+          primary: params.has("hotspot") ? 3 : 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
           perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: platform !== "macos" } },
         firstCoveredHour: nowHour - 400 * 24,
         wifiNameAccess: params.get("access") ?? "granted",
@@ -110,6 +112,7 @@ mockIPC((cmd, args: any) => {
         sampleInterval: 30,
         retentionMonths: 24,
         uploadAlerts: true,
+        weeklySummary,
         canThrottle: params.get("platform") !== "windows",
         trayRate,
       };
@@ -128,6 +131,10 @@ mockIPC((cmd, args: any) => {
         const used = c.appId === null ? sumUsed(c.networkId, from) + (EXTRA_USED[c.id] ?? 0) : (app?.rx ?? 0) + (app?.tx ?? 0);
         return { ...c, used, start: start.getTime() / 1000, end: end.getTime() / 1000, appName: app?.name ?? null };
       });
+    case "set_weekly_summary":
+      weeklySummary = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
     case "set_tray_rate":
       trayRate = args.on;
       setTimeout(() => emit("overlook://changed"));

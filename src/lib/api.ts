@@ -19,7 +19,7 @@ export interface Network {
 export interface Status {
   networks: Network[];
   live: {
-    active: { networkId: number; interface: string; kind: string }[];
+    active: { networkId: number; interface: string; kind: string; hotspot: boolean }[];
     primary: number | null;
     rate: [number, number] | null;
     lastSample: number;
@@ -31,6 +31,7 @@ export interface Status {
   sampleInterval: number;
   retentionMonths: number;
   uploadAlerts: boolean;
+  weeklySummary: boolean;
   canThrottle: boolean;
   trayRate: boolean;
 }
@@ -74,6 +75,11 @@ export interface AppsReport {
 
 export const displayName = (n: Network) => n.customName ?? n.name;
 
+const hotspotKey = (id: number) => `overlook.hotspotDismissed.${id}`;
+/** A detected hotspot the user hasn't marked "Not a hotspot". */
+export const isHotspot = (a: Status["live"]["active"][number] | undefined) => !!a?.hotspot && localStorage.getItem(hotspotKey(a.networkId)) !== "1";
+export const dismissHotspot = (id: number) => localStorage.setItem(hotspotKey(id), "1");
+
 export const api = {
   status: () => invoke<Status>("status"),
   usage: (network: number | null, fromHour: number, toHour: number) =>
@@ -91,6 +97,7 @@ export const api = {
   saveCap: (cap: Cap) => invoke("save_cap", { cap }),
   deleteCap: (id: number) => invoke("delete_cap", { id }),
   setUploadAlerts: (on: boolean) => invoke("set_upload_alerts", { on }),
+  setWeeklySummary: (on: boolean) => invoke("set_weekly_summary", { on }),
   setTrayRate: (on: boolean) => invoke("set_tray_rate", { on }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),
@@ -139,9 +146,12 @@ export function useReport(network: number | null, range: RangeId, granularity: G
   }, [network, range, granularity, historyStartHour]);
 }
 
-export function useApps(network: number | null, range: RangeId) {
+/** Apps for the range, or for an explicit inclusive hour span (a picked chart bucket). */
+export function useApps(network: number | null, range: RangeId, span?: [number, number] | null) {
+  const [from, to] = span ?? [];
   return useLive<AppsReport>(() => {
     const now = new Date();
+    if (from !== undefined && to !== undefined) return api.apps(network, from, to);
     return api.apps(network, hourOf(rangeInterval(range, now).start.getTime()), hourOf(now.getTime()) + 1);
-  }, [network, range]);
+  }, [network, range, from, to]);
 }

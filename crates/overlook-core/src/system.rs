@@ -175,6 +175,62 @@ pub fn normalize_mac(raw: &str) -> Option<String> {
     (mac != "00:00:00:00:00:00" && mac != "ff:ff:ff:ff:ff:ff").then_some(mac)
 }
 
+/// Phone tethering: iOS Personal Hotspot always routes from 172.20.10.1, older Android from 192.168.43.1,
+/// and phones name their hotspot after the device by default.
+// ponytail: heuristic, misses renamed Android hotspots on random subnets; read NWPath.isExpensive on macOS if that matters.
+pub fn is_phone_hotspot(gateway_ip: &str, ssid: Option<&str>) -> bool {
+    const NAMES: [&str; 6] = ["iphone", "ipad", "android", "galaxy", "pixel", "hotspot"];
+    let named = ssid.is_some_and(|s| {
+        let s = s.to_lowercase();
+        NAMES.iter().any(|n| s.contains(n))
+    });
+    matches!(gateway_ip, "172.20.10.1" | "192.168.43.1") || named
+}
+
+/// Whether the OS itself says this connection costs money: macOS flags cellular-backed routes (phone
+/// hotspots, Wi-Fi or USB) as expensive; NetworkManager marks or guesses metered connections.
+#[cfg(target_os = "macos")]
+pub fn metered(interface: &netdev::Interface) -> bool {
+    extern "C" {
+        fn ov_expensive_interface(out: *mut std::ffi::c_char, cap: usize);
+    }
+    let mut buf = [0 as std::ffi::c_char; 32];
+    unsafe { ov_expensive_interface(buf.as_mut_ptr(), buf.len()) };
+    unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_str() == Ok(interface.name.as_str())
+}
+
+#[cfg(target_os = "linux")]
+pub fn metered(interface: &netdev::Interface) -> bool {
+    Command::new("nmcli").args(["-t", "-g", "GENERAL.METERED", "device", "show", &interface.name]).output()
+        .is_ok_and(|o| parse_nm_metered(&String::from_utf8_lossy(&o.stdout)))
+}
+
+/// Windows' own cost flag for the internet profile: phone hotspots report "variable" or "fixed" cost,
+/// and so does any connection the user set as metered. Like macOS, only the default route is known.
+#[cfg(target_os = "windows")]
+pub fn metered(interface: &netdev::Interface) -> bool {
+    use windows::Networking::Connectivity::{NetworkCostType, NetworkInformation};
+    let check = || -> windows::core::Result<bool> {
+        let profile = NetworkInformation::GetInternetConnectionProfile()?;
+        let cost = profile.GetConnectionCost()?.NetworkCostType()?;
+        let adapter = format!("{:?}", profile.NetworkAdapter()?.NetworkAdapterId()?);
+        Ok(matches!(cost, NetworkCostType::Fixed | NetworkCostType::Variable) && same_guid(&adapter, &interface.name))
+    };
+    check().unwrap_or(false)
+}
+
+/// Adapter GUIDs arrive with or without braces and in either case.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn same_guid(a: &str, b: &str) -> bool {
+    let norm = |s: &str| s.trim_matches(['{', '}']).to_ascii_lowercase();
+    !a.is_empty() && norm(a) == norm(b)
+}
+
+/// nmcli prints "yes", "no", "yes (guessed)", "no (guessed)" or "unknown".
+pub fn parse_nm_metered(output: &str) -> bool {
+    output.trim().starts_with("yes")
+}
+
 #[cfg(target_os = "macos")]
 pub fn ssid(interface: &netdev::Interface) -> Option<String> {
     use objc2_core_wlan::CWWiFiClient;
@@ -416,6 +472,34 @@ mod tests {
         assert_eq!(parse_arp(out, "10.0.0.1", "en1"), None);
         assert_eq!(parse_arp(out, "10.0.0.7", "en0"), None);
         assert_eq!(normalize_mac("AA-BB-CC-DD-EE-0F").as_deref(), Some("aa:bb:cc:dd:ee:0f"));
+    }
+
+    #[test] fn phone_hotspots_are_recognised() {
+        assert!(is_phone_hotspot("172.20.10.1", None));
+        assert!(is_phone_hotspot("192.168.43.1", Some("AndroidAP")));
+        assert!(is_phone_hotspot("10.7.0.1", Some("Sam’s iPhone")));
+        assert!(is_phone_hotspot("192.168.1.1", Some("Galaxy S24 Ultra 9F2C")));
+        assert!(!is_phone_hotspot("192.168.1.1", Some("Lakeview 5G")));
+        assert!(!is_phone_hotspot("10.0.0.1", None));
+    }
+
+    #[test] fn adapter_guids_match_across_formats() {
+        assert!(same_guid("1A2B3C4D-0000-1111-2222-333344445555", "{1a2b3c4d-0000-1111-2222-333344445555}"));
+        assert!(!same_guid("1A2B3C4D-0000-1111-2222-333344445555", "{9a2b3c4d-0000-1111-2222-333344445555}"));
+        assert!(!same_guid("", ""));
+    }
+
+    #[test] fn nm_metered_counts_guesses() {
+        assert!(parse_nm_metered("yes\n") && parse_nm_metered("yes (guessed)\n"));
+        assert!(!parse_nm_metered("no (guessed)\n") && !parse_nm_metered("unknown\n") && !parse_nm_metered(""));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test] fn expensive_route_check_answers() {
+        // No assertion on the value: it depends on how this Mac is connected. It must answer, not hang or crash.
+        for i in netdev::get_interfaces().iter().filter(|i| is_physical(i)) {
+            eprintln!("{} metered: {}", i.name, metered(i));
+        }
     }
 
     #[test] fn iw_link() {

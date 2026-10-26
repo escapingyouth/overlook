@@ -148,11 +148,13 @@ export function CapCompact({ cap, networks }: Readonly<{ cap: CapUsage; networks
   );
 }
 
-export function CapsPane({ status }: Readonly<{ status: Status }>) {
+const newCap = (networkId: number | null): Cap => ({ id: 0, networkId, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null });
+
+export function CapsPane({ status, newCapFor }: Readonly<{ status: Status; newCapFor?: number }>) {
   const caps = useCaps() ?? [];
-  const [editing, setEditing] = useState<Cap | null>(null);
+  const [editing, setEditing] = useState<Cap | null>(() => (newCapFor === undefined ? null : newCap(newCapFor)));
   if (editing) return <CapForm status={status} cap={editing} onDone={() => setEditing(null)} />;
-  const add = () => setEditing({ id: 0, networkId: status.live.primary, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null });
+  const add = () => setEditing(newCap(status.live.primary));
   return (
     <>
       <h3>Caps & alerts</h3>
@@ -180,8 +182,11 @@ export function CapsPane({ status }: Readonly<{ status: Status }>) {
           </span>
         </button>
       </div>
-      <Setting title="Unusual upload alerts" desc="Notifies you when an hour's upload is far above normal for that network, such as an unexpected backup or sync.">
-        <Toggle label="Unusual upload alerts" checked={status.uploadAlerts} onChange={(v) => api.setUploadAlerts(v)} />
+      <Setting title="Unusual usage alerts" desc={`Notifies you when an hour's upload is far above normal for that network, such as an unexpected backup or sync${status.live.perApp.enabled ? ", or when one app uses far more than it usually does" : ""}.`}>
+        <Toggle label="Unusual usage alerts" checked={status.uploadAlerts} onChange={(v) => api.setUploadAlerts(v)} />
+      </Setting>
+      <Setting title="Weekly summary" desc={`A notification on Monday with last week's total, how it compares with the week before, and the network${status.live.perApp.enabled ? " and app" : ""} that used the most.`}>
+        <Toggle label="Weekly summary" checked={status.weeklySummary} onChange={(v) => api.setWeeklySummary(v)} />
       </Setting>
     </>
   );

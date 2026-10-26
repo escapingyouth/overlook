@@ -1,18 +1,18 @@
 import { createContext, useContext, useState } from "react";
-import { GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useLive, useRate, useReport } from "../lib/api";
+import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
+import { api, dismissHotspot, displayName, isHotspot, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
 import { CapsCard } from "./Caps";
-import { TopApps } from "./TopApps";
+import { PickedSpan, TopApps } from "./TopApps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onEnablePerApp }: Readonly<{
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onNewCap, onEnablePerApp }: Readonly<{
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -21,14 +21,26 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onRename: (n: Network) => void;
   onAccuracy: () => void;
   onCaps: () => void;
+  onNewCap: (networkId: number) => void;
   onEnablePerApp: () => void;
 }>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
+  // Keyed by start time, not index, so the pick survives the 24-hour window sliding on refresh.
+  const [pickedAt, setPickedAt] = useState<number | null>(null);
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
+  // Dismissal lives in localStorage; this re-renders the header and callout when it changes.
+  const [, setDismissals] = useState(0);
   const report = useReport(network?.id ?? null, range, granularity[range], status.firstCoveredHour);
   if (!report) return null;
   const info = rangeInfo(range);
+  const pickedIndex = report.buckets.findIndex((b) => b.start.getTime() === pickedAt);
+  const picked = pickedIndex >= 0 ? report.buckets[pickedIndex] : null;
+  const span: PickedSpan | null = picked && { hours: bucketHours(picked), title: bucketTitle(picked, report.granularity) };
+  const pick = (i: number | null) => {
+    setPickedAt(i === null ? null : report.buckets[i].start.getTime());
+    if (i !== null) requestAnimationFrame(() => document.getElementById("top-apps")?.scrollIntoView({ block: "nearest" }));
+  };
 
   return (
     <ReportContext.Provider value={report}>
@@ -43,6 +55,10 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
 
+      <HotspotCallout status={status} network={network} onNewCap={onNewCap} onDismiss={(id) => {
+        dismissHotspot(id);
+        setDismissals((n) => n + 1);
+      }} />
       <CapsCard status={status} network={network} onManage={onCaps} />
 
       <div className="main-grid">
@@ -56,7 +72,10 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </div>
             </div>
             {info.granularities.length > 1 && (
-              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => setGranularity({ ...granularity, [range]: g })}
+              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => {
+                  setGranularity({ ...granularity, [range]: g });
+                  setPickedAt(null);
+                }}
                 options={info.granularities.map((g) => ({ value: g, label: GRANULARITY_LABEL[g] }))} />
             )}
           </div>
@@ -68,13 +87,16 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </button>
             ))}
           </div>
-          <TrendChart report={report} show={show} height={narrow ? 240 : 290} />
+          <TrendChart report={report} show={show} height={narrow ? 240 : 290} picked={picked ? pickedIndex : null} onPick={pick} />
         </section>
       </div>
 
-      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp} />
+      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp}
+        span={span} onClear={() => setPickedAt(null)} />
 
-      {network ? <DaysTable report={report} /> : <NetworksTable status={status} report={report} onSelect={onSelect} />}
+      {network ? <DaysTable report={report} /> : (
+        <NetworksTable status={status} report={report} onSelect={onSelect} span={span} />
+      )}
 
       <div className={`row ${network ? "three" : ""}`}>
         {range !== "day" && (
@@ -94,6 +116,31 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
       <Footnote report={report} network={network} onAccuracy={onAccuracy} />
     </div>
     </ReportContext.Provider>
+  );
+}
+
+/** Phone plans run out fast: offer a cap when the network in view is a hotspot nothing caps yet. */
+function HotspotCallout({ status, network, onNewCap, onDismiss }: Readonly<{
+  status: Status;
+  network: Network | null;
+  onNewCap: (id: number) => void;
+  onDismiss: (id: number) => void;
+}>) {
+  const caps = useCaps();
+  const id = network?.id ?? status.live.primary;
+  const active = status.live.active.find((a) => a.networkId === id);
+  const n = status.networks.find((x) => x.id === id);
+  if (!isHotspot(active) || !n || !caps || caps.some((c) => c.networkId === id && c.appId === null)) return null;
+  return (
+    <section className="callout" aria-label="Phone hotspot">
+      <span className="icon-tile lg"><Icon name="phone" size={18} /></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="callout-title">{network ? "This looks like a phone hotspot" : `You're on a phone hotspot · ${displayName(n)}`}</div>
+        <div className="muted" style={{ fontSize: 12.5 }}>Mobile data runs out fast. Set a cap to get alerts, or a hard stop, before the plan does.</div>
+      </div>
+      <button className="btn ghost" onClick={() => onDismiss(n.id)}>Not a hotspot</button>
+      <button className="btn primary" onClick={() => onNewCap(n.id)}>Set a cap</button>
+    </section>
   );
 }
 
@@ -121,7 +168,7 @@ function PageHead({ status, network }: Readonly<{ status: Status; network: Netwo
         <div className="muted" style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
           <span className={`dot ${live ? "" : "off"}`} />
           {network
-            ? active ? `Connected · ${active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
+            ? active ? `Connected · ${isHotspot(active) ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
             : current ? `${status.networks.length} networks · on ${displayName(current)}` : `${status.networks.length} networks · offline`}
         </div>
       </div>
@@ -199,8 +246,9 @@ function SplitDonut({ report }: Readonly<{ report: Report }>) {
   );
 }
 
-function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void }>) {
-  const totals = useLive(() => api.totals(hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1), [report.start.getTime()]) ?? [];
+function NetworksTable({ status, report, onSelect, span }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void; span: PickedSpan | null }>) {
+  const [from, to] = span?.hours ?? [hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1];
+  const totals = useLive(() => api.totals(from, to), [from, to]) ?? [];
   const rows = status.networks
     .map((n) => {
       const t = totals.find((t) => t.networkId === n.id);
@@ -209,7 +257,7 @@ function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; 
     .sort((a, b) => b.rx + b.tx - (a.rx + a.tx));
   return (
     <section className="panel">
-      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{rangeInfo(report.range).title}</span></div>
+      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{span?.title ?? rangeInfo(report.range).title}</span></div>
       <div style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>

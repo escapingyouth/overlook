@@ -11,10 +11,10 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (48 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (56 tests)
 cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
-cargo test --workspace                   # everything, including the shell (60 tests)
-npm test                              # ranges, buckets, statistics, per-app (21 tests)
+cargo test --workspace                   # everything, including the shell (68 tests)
+npm test                              # ranges, buckets, statistics, per-app (23 tests)
 ```
 
 On Linux and Windows the per-app helper sidecar is built by `node scripts/build-helper.mjs`. `npm run tauri dev` and `npm run tauri build` run it automatically; run it by hand before a bare `cargo build -p overlook`.
@@ -52,9 +52,10 @@ crates/overlook-core   Rust, no UI. Unit-tested.
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
   apps.rs           per-app snapshot types, app keys, delta tracking
   nstat.c           macOS per-app byte counts from NetworkStatistics (built only for macOS)
+  netpath.c         macOS: which interface Network.framework marks expensive (phone hotspots)
   store.rs          SQLite (hourly buckets; adds apps, app_usage and app_coverage tables for per-app)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
-  caps.rs           data caps (day/week/month, per network or all), threshold + unusual-upload alerts
+  caps.rs           data caps (day/week/month, per network or all), threshold, unusual-upload and app-spike alerts, hotspot nudge, weekly summary
   enforce.rs        when a cap runs out: disconnect Wi-Fi, or throttle via pf/dummynet (macOS) or tc (Linux)
 crates/overlook-helper  Windows (ETW) / Linux (sock_diag) per-app sidecar, run as a service
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
@@ -109,8 +110,10 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
 ### Limitations
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
-- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Caps on a single app (needs per-app tracking) only alert. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB.
+- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Caps on a single app (needs per-app tracking) only alert. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB. With per-app tracking on, the same switch alerts when an app's hour on a network exceeds 5× its typical hour there and 250 MB, at most once per app, network and day, and only after a day of per-app history; System is never singled out.
 - Per-app tracking is opt-in and only counts from when it's turned on.
+- **Weekly summary** (on by default, in Caps & alerts): one notification from 09:00 on Monday, or the next time Overlook runs that week, with last week's total, the change from the week before (only when that week was tracked), the busiest network and, with per-app on, the top app. Weeks run Monday to Sunday regardless of locale, and a week with no usage is skipped.
+- **Phone hotspots** are recognised when the OS says the connection costs money (macOS: Network.framework marks the route expensive, which also covers USB tethering; Windows: the internet profile's connection cost is fixed or variable; Linux: NetworkManager's metered flag, guessed or set), and otherwise by gateway (iPhone `172.20.10.1`, older Android `192.168.43.1`) or a phone-style Wi-Fi name (iPhone, Galaxy, Pixel, …). On macOS and Windows only the interface carrying the default route can be flagged by the OS, and on Windows (and Linux) a connection you've set as metered counts too; one that is wrongly flagged can be dismissed with *Not a hotspot*. Overlook notifies once per hotspot that has no cap of its own.
 - On macOS, per-app counts closed connections too, including short downloads that open and close between samples. It uses NetworkStatistics, a private Apple framework that a future macOS may change or remove; if it does, per-app shows an error and network totals are unaffected.
 - On Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. It also counts TCP only (UDP/QUIC lands in System).
 - macOS apps whose icon lives only in an asset catalog get a generic icon.
@@ -131,6 +134,8 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
   - Page header: name, connection status, live rate.
   - Four stat cards (total, downloaded, uploaded, daily average), each with an icon tile, the value and a neutral change pill vs the previous period.
   - *Download vs upload* (a donut with rounded segments, the total in the centre, the estimated share noted, and icon-tiled figures below) beside *Usage trend* (overlaid lines, a gradient under the leading series, legend dots that toggle each series, a dashed hover guide with dots and a tooltip; untracked periods break the lines).
+  - Clicking a point on *Usage trend* (or arrow keys + Enter when the chart is focused) marks it and turns *Top apps* into *What used data* for that hour, day, week or month, and in All networks the *Networks* table splits that period by network; *Whole range* or Escape goes back.
+  - On a phone hotspot with no cap, a callout above the caps offers *Set a cap*, which opens a new cap for that network.
   - A table card with status pills: networks (Connected / last seen) in the All-networks view, or recent days (Measured / estimated / Not tracked) for one network.
   - Typical usage, Highlights and About-network cards.
   - Top bar: a range dropdown (⌘/Ctrl+1…7) and a primary **Export CSV** button that saves hourly rows to Downloads.

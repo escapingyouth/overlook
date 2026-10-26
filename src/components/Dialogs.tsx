@@ -127,9 +127,11 @@ const TABS: { id: string; label: string; icon: IconName }[] = [
   { id: "accuracy", label: "Accuracy", icon: "info" },
 ];
 
-export function Settings({ status, initialTab, appearance, onAppearance, onClose }: Readonly<{
+export function Settings({ status, initialTab, newCapFor, appearance, onAppearance, onClose }: Readonly<{
   status: Status;
   initialTab?: string;
+  /** Open the caps tab straight on a new cap for this network. */
+  newCapFor?: number;
   appearance: Appearance;
   onAppearance: (a: Appearance) => void;
   onClose: () => void;
@@ -149,7 +151,7 @@ export function Settings({ status, initialTab, appearance, onAppearance, onClose
         </nav>
         <div className="settings-pane">
           {tab === "general" && <General status={status} />}
-          {tab === "caps" && <CapsPane status={status} />}
+          {tab === "caps" && <CapsPane status={status} newCapFor={newCapFor} />}
           {tab === "appearance" && <AppearancePane value={appearance} onChange={onAppearance} />}
           {tab === "data" && <DataPane status={status} />}
           {tab === "accuracy" && <Accuracy status={status} />}

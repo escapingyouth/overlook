@@ -1,3 +1,4 @@
+use crate::apps::SYSTEM_KEY;
 use crate::store::{hour_of, Store};
 use crate::ActiveNetwork;
 use chrono::{Datelike, Days, Local, Months, NaiveDate, TimeZone};
@@ -7,6 +8,8 @@ use std::collections::HashMap;
 // ponytail: fixed heuristic, make it a setting if people find it too chatty or too quiet.
 const UPLOAD_FLOOR: i64 = 250_000_000;
 const UPLOAD_FACTOR: i64 = 5;
+/// An app needs a day of per-app history before it can look unusual; until then everything is new.
+const APP_HISTORY_HOURS: f64 = 24.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -146,6 +149,21 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
         }
     }
 
+    // One nudge per hotspot, and only while nothing caps it specifically: phone plans run out fast.
+    let capped: Vec<i64> = store.caps().iter().filter(|c| c.app_id.is_none()).filter_map(|c| c.network_id).collect();
+    for a in active.iter().filter(|a| a.hotspot && !capped.contains(&a.network_id)) {
+        if store.mark_once(&format!("hotspot:{}", a.network_id)) {
+            v.notices.push(Notice {
+                title: format!("{} looks like a phone hotspot", name(Some(a.network_id))),
+                body: "Overlook is counting its data separately. Open Overlook to set a cap and get alerts before your plan runs out.".into(),
+            });
+        }
+    }
+
+    if store.meta("weekly_summary").as_deref() != Some("0") {
+        v.notices.extend(weekly_summary(store, &Local, now));
+    }
+
     if store.meta("upload_alerts").as_deref() != Some("0") {
         let h = hour_of(now);
         let mut ids: Vec<i64> = active.iter().map(|a| a.network_id).collect();
@@ -161,9 +179,71 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
                     body: format!("{} uploaded this hour, vs about {} in a typical hour.", gb(current), gb(typical)),
                 });
             }
+            app_spikes(store, &mut v, id, &name(Some(id)), h);
         }
     }
     v
+}
+
+/// Last week in one notification, from 09:00 on Monday (or whenever Overlook next runs that week).
+// ponytail: weeks start Monday for everyone; pass the UI's locale week start if Sunday-first users ask.
+fn weekly_summary<Tz: TimeZone>(store: &Store, tz: &Tz, now: f64) -> Option<Notice> {
+    let (this_week, _) = period_bounds(tz, "week", 1, now);
+    let (last_week, _) = period_bounds(tz, "week", 1, this_week - 1.0);
+    let (week_before, _) = period_bounds(tz, "week", 1, last_week - 1.0);
+    if now < this_week + 9.0 * 3600.0 {
+        return None;
+    }
+    let (from, to) = (hour_of(last_week), hour_of(this_week) - 1);
+    let sum = |from, to| store.hours(None, from, to).iter().map(|r| r.rx + r.tx).sum::<i64>();
+    let total = sum(from, to);
+    if total == 0 || !store.mark_once(&format!("summary:{}", last_week as i64)) {
+        return None;
+    }
+
+    let mut parts = vec![];
+    let previous = sum(hour_of(week_before), from - 1);
+    if previous > 0 && !store.coverage(hour_of(week_before), from - 1).is_empty() {
+        let change = (total - previous) as f64 / previous as f64;
+        parts.push(match change {
+            c if c.abs() < 0.05 => "About the same as the week before.".to_string(),
+            c => format!("{} {:.0}% on the week before.", if c > 0.0 { "Up" } else { "Down" }, c.abs() * 100.0),
+        });
+    }
+    let names: HashMap<i64, String> = store.networks().into_iter().map(|n| (n.id, n.custom_name.unwrap_or(n.name))).collect();
+    let used: Vec<_> = store.totals_by_network(from, to).into_iter().filter(|t| t.rx + t.tx > 0).collect();
+    if let Some(top) = used.iter().max_by_key(|t| t.rx + t.tx) {
+        let name = names.get(&top.network_id).map_or("one network", String::as_str);
+        parts.push(if used.len() == 1 { format!("All on {name}.") } else { format!("Most on {name} ({}).", gb(top.rx + top.tx)) });
+    }
+    // Turning per-app off keeps its history, but the summary should follow the setting.
+    let per_app = store.meta("per_app").as_deref() == Some("on");
+    if let Some(app) = store.apps_report(None, from, to).apps.into_iter().find(|a| per_app && a.key != SYSTEM_KEY && a.rx + a.tx > 0) {
+        parts.push(format!("Top app: {} ({}).", app.name, gb(app.rx + app.tx)));
+    }
+    Some(Notice { title: format!("Last week: {} used", gb(total)), body: parts.join(" ") })
+}
+
+/// An app using far more this hour than its typical hour on this network (or a lot, for an app new here).
+/// Once per app, network and day, so a long download alerts once rather than every hour.
+fn app_spikes(store: &Store, v: &mut Verdict, network: i64, network_name: &str, h: i64) {
+    let history = store.app_covered_hours(h - 14 * 24, h - 1);
+    if history < APP_HISTORY_HOURS {
+        return;
+    }
+    let past = store.apps_report(Some(network), h - 14 * 24, h - 1).apps;
+    let local_day = Local.timestamp_opt(h * 3600, 0).single().map_or(h.div_euclid(24).to_string(), |t| t.date_naive().to_string());
+    for app in store.apps_report(Some(network), h, h).apps.into_iter().filter(|a| a.key != SYSTEM_KEY) {
+        let current = app.rx + app.tx;
+        let typical = past.iter().find(|p| p.id == app.id).map_or(0, |p| ((p.rx + p.tx) as f64 / history) as i64);
+        if current > (typical * UPLOAD_FACTOR).max(UPLOAD_FLOOR) && store.mark_once(&format!("app:{}:{network}:{local_day}", app.id)) {
+            let usual = if typical > 0 { format!("vs about {} in a typical hour", gb(typical)) } else { "and it rarely uses data here".into() };
+            v.notices.push(Notice {
+                title: format!("{} is using a lot of data", app.name),
+                body: format!("{} on {network_name} this hour, {usual}.", gb(current)),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -193,7 +273,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         s.add(&UsageDelta { network_id: id, rx: 850_000_000, tx: 0, estimated: false, at: now });
         s.save_cap(&Cap { id: 0, network_id: Some(id), period: "day".into(), reset: 0, limit_bytes: 1_000_000_000, alerts: vec![80, 100], action: "block".into(), throttle_kbps: 1000, app_id: None });
 
@@ -214,7 +294,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         let dropbox = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
         let other = s.insert_app("/Applications/Safari.app", "Safari", None);
         s.add(&UsageDelta { network_id: id, rx: 3_000_000_000, tx: 0, estimated: false, at: now });
@@ -247,7 +327,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
         s.add_app_usage(id, app, now, 900, 0);
         let cap = Cap { id: 0, network_id: None, period: "day".into(), reset: 0, limit_bytes: 1000, alerts: vec![80], action: "none".into(), throttle_kbps: 1000, app_id: Some(app) };
@@ -262,12 +342,99 @@ mod tests {
         assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
     }
 
+    #[test] fn hotspots_without_a_cap_nudge_once() {
+        let s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = |key, name| NetworkInput { key, name, kind: "wifi", ssid: Some(name), router_mac: None, interface: "en0" };
+        let phone = s.resolve_network(&net("wifi:Sam’s iPhone", "Sam’s iPhone"), now).unwrap();
+        let capped = s.resolve_network(&net("wifi:Pixel", "Pixel"), now).unwrap();
+        s.save_cap(&Cap { id: 0, network_id: Some(capped), period: "month".into(), reset: 1, limit_bytes: 1_000_000_000, alerts: vec![], action: "none".into(), throttle_kbps: 1000, app_id: None });
+        let active = |id| ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: true };
+
+        let v = evaluate(&s, &[active(phone), active(capped)], now);
+        assert_eq!(v.notices.len(), 1);
+        assert_eq!(v.notices[0].title, "Sam’s iPhone looks like a phone hotspot");
+        assert!(evaluate(&s, &[active(phone)], now).notices.is_empty());
+    }
+
+    #[test] fn app_spikes_alert_once_a_day_after_a_day_of_history() {
+        let s = Store::open(":memory:").unwrap();
+        let h = hour_of(crate::now());
+        let at = |hour: i64| hour as f64 * 3600.0 + 60.0;
+        let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, at(h)).unwrap();
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
+        let steady = s.insert_app("/Applications/Spotify.app", "Spotify", None);
+        let backup = s.insert_app("/Applications/Backblaze.app", "Backblaze", None);
+        let system = s.insert_app(SYSTEM_KEY, "System", None);
+        let busy_hour = |s: &Store| {
+            s.add_app_usage(id, steady, at(h), 400_000_000, 0); // 400 MB, but Spotify always does about that
+            s.add_app_usage(id, backup, at(h), 0, 300_000_000); // 300 MB from an app that's usually idle here
+            s.add_app_usage(id, system, at(h), 900_000_000, 0); // System is the unattributed rest, never singled out
+        };
+
+        // Brand-new per-app tracking: everything would look unusual, so nothing alerts.
+        busy_hour(&s);
+        assert!(evaluate(&s, &active, at(h)).notices.is_empty());
+
+        for past in h - 30..h {
+            s.add_app_coverage(past as f64 * 3600.0, (past + 1) as f64 * 3600.0);
+            s.add_app_usage(id, steady, at(past), 350_000_000, 0);
+        }
+        let v = evaluate(&s, &active, at(h));
+        assert_eq!(v.notices.len(), 1);
+        assert_eq!(v.notices[0].title, "Backblaze is using a lot of data");
+        assert_eq!(v.notices[0].body, "300 MB on Home this hour, and it rarely uses data here.");
+        assert!(evaluate(&s, &active, at(h)).notices.is_empty());
+    }
+
+    #[test] fn weekly_summary_compares_weeks_and_names_where_it_went() {
+        let s = Store::open(":memory:").unwrap();
+        let day = |d: u32, h: u32| Utc.with_ymd_and_hms(2026, 10, d, h, 0, 0).unwrap().timestamp() as f64;
+        let net = |key, name| NetworkInput { key, name, kind: "wifi", ssid: Some(name), router_mac: None, interface: "en0" };
+        let home = s.resolve_network(&net("wifi:Home", "Home"), day(12, 8)).unwrap();
+        let cafe = s.resolve_network(&net("wifi:Cafe", "Cafe"), day(12, 8)).unwrap();
+        let steam = s.insert_app("/Applications/Steam.app", "Steam", None);
+        // 2026-10-19 and 10-26 are Mondays: the week before is Oct 12–18, last week Oct 19–25.
+        s.add_coverage(day(14, 10), day(14, 11));
+        s.add(&UsageDelta { network_id: home, rx: 20_000_000_000, tx: 0, estimated: false, at: day(14, 10) });
+        s.add(&UsageDelta { network_id: home, rx: 18_000_000_000, tx: 1_000_000_000, estimated: false, at: day(21, 10) });
+        s.add(&UsageDelta { network_id: cafe, rx: 4_000_000_000, tx: 0, estimated: false, at: day(25, 15) });
+        s.add_app_usage(home, steam, day(21, 10), 9_000_000_000, 0);
+        s.set_meta("per_app", "on");
+
+        assert_eq!(weekly_summary(&s, &Utc, day(26, 8)), None, "waits for 09:00");
+        let n = weekly_summary(&s, &Utc, day(26, 9)).unwrap();
+        assert_eq!(n.title, "Last week: 23 GB used");
+        assert_eq!(n.body, "Up 15% on the week before. Most on Home (19 GB). Top app: Steam (9.0 GB).");
+        assert_eq!(weekly_summary(&s, &Utc, day(27, 9)), None, "once a week");
+
+        // Per-app turned off: its history stays, but the next summary leaves the app out.
+        s.set_meta("per_app", "off");
+        s.add(&UsageDelta { network_id: home, rx: 1_000_000_000, tx: 0, estimated: false, at: day(28, 10) });
+        s.add_app_usage(home, steam, day(28, 10), 1_000_000_000, 0);
+        let n = weekly_summary(&s, &Utc, Utc.with_ymd_and_hms(2026, 11, 2, 9, 0, 0).unwrap().timestamp() as f64).unwrap();
+        assert!(!n.body.contains("Steam"), "{}", n.body);
+    }
+
+    #[test] fn weekly_summary_skips_an_empty_week_and_untracked_comparisons() {
+        let s = Store::open(":memory:").unwrap();
+        let day = |d: u32, h: u32| Utc.with_ymd_and_hms(2026, 10, d, h, 0, 0).unwrap().timestamp() as f64;
+        assert_eq!(weekly_summary(&s, &Utc, day(26, 12)), None);
+        let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, day(28, 12)).unwrap();
+        s.add(&UsageDelta { network_id: id, rx: 2_000_000_000, tx: 0, estimated: false, at: day(28, 12) });
+        let n = weekly_summary(&s, &Utc, Utc.with_ymd_and_hms(2026, 11, 2, 10, 0, 0).unwrap().timestamp() as f64).unwrap();
+        assert_eq!(n.body, "All on Home.");
+    }
+
     #[test] fn unusual_upload_alerts_once_per_hour() {
         let s = Store::open(":memory:").unwrap();
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
+        s.set_meta("weekly_summary", "0"); // the 48 h of history can fall in last week, depending on today's date
         for h in 1..48 {
             s.add(&UsageDelta { network_id: id, rx: 0, tx: 20_000_000, estimated: false, at: now - h as f64 * 3600.0 });
         }

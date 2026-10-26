@@ -104,6 +104,9 @@ export interface Bucket {
 
 export const bucketTotal = (b: Bucket) => (b.rx === null ? null : b.rx + (b.tx ?? 0));
 
+/** The bucket as an inclusive hour span, the form the backend queries take. */
+export const bucketHours = (b: Bucket): [number, number] => [hourOf(b.start.getTime()), hourOf(b.end.getTime() - 1)];
+
 export interface DayUsage {
   day: Date;
   total: number;
