@@ -14,10 +14,10 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-pub struct Owner { gid: u32 }
+pub struct Owner { uid: u32 }
 
 impl Owner {
-    /// Numeric uid or username, resolved through NSS; the snapshot is readable by its primary group.
+    /// Numeric uid or username, resolved through NSS; only that user can read the snapshot.
     pub fn parse(s: &str) -> Result<Owner, String> {
         let pw = if !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()) {
             let uid: u32 = s.parse().map_err(|_| format!("bad uid {s:?}"))?;
@@ -29,23 +29,23 @@ impl Owner {
         if pw.is_null() {
             return Err(format!("unknown owner {s:?}"));
         }
-        Ok(Owner { gid: unsafe { (*pw).pw_gid } })
+        Ok(Owner { uid: unsafe { (*pw).pw_uid } })
     }
 }
 
-pub fn secure_dir(dir: &Path, owner: &Owner) -> Result<(), String> {
+pub fn secure_dir(dir: &Path, _owner: &Owner) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", dir.display());
     fs::create_dir_all(dir).map_err(err)?;
     if !fs::symlink_metadata(dir).map_err(err)?.is_dir() {
         return Err(format!("{} is not a directory", dir.display()));
     }
-    std::os::unix::fs::chown(dir, Some(0), Some(owner.gid)).map_err(err)?;
-    fs::set_permissions(dir, fs::Permissions::from_mode(0o750)).map_err(err)
+    std::os::unix::fs::chown(dir, Some(0), Some(0)).map_err(err)?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).map_err(err)
 }
 
 pub fn secure_file(f: &fs::File, owner: &Owner) -> std::io::Result<()> {
-    std::os::unix::fs::fchown(f, Some(0), Some(owner.gid))?;
-    f.set_permissions(fs::Permissions::from_mode(0o640))
+    f.set_permissions(fs::Permissions::from_mode(0o400))?;
+    std::os::unix::fs::fchown(f, Some(owner.uid), Some(0))
 }
 
 /// Sockets are polled each round, so there is nothing running in the background.

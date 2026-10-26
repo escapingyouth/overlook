@@ -38,17 +38,42 @@ fn icacls(args: &[&str]) -> Result<(), String> {
 }
 
 /// SYSTEM owns the directory; only SYSTEM (full) and the owner (read) have access, inherited by the snapshot.
+/// ProgramData is user-writable, so a directory a user pre-created (owner not SYSTEM/Administrators) is refused;
+/// nothing here recurses, so planted junctions inside are never followed.
 pub fn secure_dir(dir: &Path, owner: &Owner) -> Result<(), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let err = |e: std::io::Error| format!("{}: {e}", dir.display());
+    match std::fs::create_dir(dir) {
+        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(err(e)),
+        _ => {}
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(err)?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(format!("{} is not a plain directory", dir.display()));
     }
+    if !owned_by_admin(dir)? {
+        return Err(format!("{} exists and is not owned by SYSTEM or Administrators; remove it and restart the service", dir.display()));
+    }
     let d = dir.to_str().ok_or("non-UTF-8 snapshot dir")?;
-    // ProgramData is user-writable, so take ownership and wipe any ACEs a user may have planted.
     icacls(&[d, "/setowner", SYSTEM_SID])?;
-    icacls(&[d, "/reset", "/T"])?;
     icacls(&[d, "/inheritance:r", "/grant:r", &format!("{SYSTEM_SID}:(OI)(CI)F"), &format!("{}:(OI)(CI)R", owner.0)])
+}
+
+fn owned_by_admin(dir: &Path) -> Result<bool, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::LocalFree;
+    use windows_sys::Win32::Security::Authorization::{GetNamedSecurityInfoW, SE_FILE_OBJECT};
+    use windows_sys::Win32::Security::{IsWellKnownSid, WinBuiltinAdministratorsSid, WinLocalSystemSid, OWNER_SECURITY_INFORMATION};
+    let wide: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+    let (mut sid, mut sd) = (std::ptr::null_mut(), std::ptr::null_mut());
+    unsafe {
+        let rc = GetNamedSecurityInfoW(wide.as_ptr(), SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION, &mut sid, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), &mut sd);
+        if rc != 0 {
+            return Err(format!("{}: GetNamedSecurityInfoW error {rc}", dir.display()));
+        }
+        let ok = IsWellKnownSid(sid, WinLocalSystemSid) != 0 || IsWellKnownSid(sid, WinBuiltinAdministratorsSid) != 0;
+        LocalFree(sd);
+        Ok(ok)
+    }
 }
 
 /// The snapshot inherits the directory ACL set by `secure_dir`.

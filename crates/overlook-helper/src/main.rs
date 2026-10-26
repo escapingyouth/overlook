@@ -102,7 +102,7 @@ fn write_atomic(path: &std::path::Path, data: &[u8], owner: &platform::Owner) ->
     let mut opts = std::fs::OpenOptions::new();
     opts.write(true).create_new(true);
     #[cfg(target_os = "linux")]
-    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o640);
+    std::os::unix::fs::OpenOptionsExt::mode(&mut opts, 0o400);
     let mut f = opts.open(&tmp)?;
     platform::secure_file(&f, owner)?;
     f.write_all(data)?;
