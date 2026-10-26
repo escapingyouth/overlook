@@ -5,7 +5,7 @@ import { ago } from "./lib/format";
 import { useAppearance } from "./lib/theme";
 import { Dashboard } from "./components/Dashboard";
 import { Icon, kindIcon } from "./components/Icon";
-import { Onboarding, RenameDialog, ConfirmDialog, Settings } from "./components/Dialogs";
+import { Onboarding, RenameDialog, ConfirmDialog, PerAppDialog, Settings } from "./components/Dialogs";
 import { ExportButton, RangeMenu } from "./components/Toolbar";
 
 type Overlay =
@@ -80,6 +80,7 @@ export default function App() {
       {overlay?.kind === "settings" && (
         <Settings status={status} initialTab={overlay.tab} appearance={appearance} onAppearance={setAppearance} onClose={() => setOverlay(null)} />
       )}
+      {overlay?.kind === "perApp" && <PerAppDialog status={status} onClose={() => setOverlay(null)} />}
       {overlay?.kind === "rename" && <RenameDialog network={overlay.network} onClose={() => setOverlay(null)} />}
       {overlay?.kind === "delete" && (
         <ConfirmDialog

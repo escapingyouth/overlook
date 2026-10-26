@@ -43,6 +43,46 @@ export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: {
   );
 }
 
+export function PerAppDialog({ status, onClose }: { status: Status; onClose: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const helper = status.platform === "windows" ? "admin rights" : "root";
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setPerApp(true);
+      onClose();
+    } catch (e) {
+      setError(String(e));
+      setBusy(false);
+    }
+  };
+  const row = (label: string, text: string) => (
+    <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+      <b style={{ width: 62, flex: "none" }}>{label}</b>
+      <span className="muted">{text}</span>
+    </div>
+  );
+  return (
+    <Dialog onClose={onClose}>
+      <div className="dialog-body">
+        <h2>Turn on per-app tracking? {status.live.perApp.experimental && <span className="pill muted">Experimental</span>}</h2>
+        {row("Pro", "See which apps use data on each network.")}
+        {status.platform !== "macos" && row("Con", `Needs ${helper} to install a small background helper.`)}
+        {status.platform !== "macos" && row("Con", "A helper process runs alongside Overlook.")}
+        {row("Con", "Only tracks from now on. Earlier history stays per-network only.")}
+        {row("Privacy", "App names and byte counts only, never contents or destinations. Stored only on this computer.")}
+        {error && <span className="pill warn">{error}</span>}
+      </div>
+      <div className="dialog-actions">
+        <button className="btn" onClick={onClose}>Cancel</button>
+        <button className="btn primary" autoFocus disabled={busy} onClick={turnOn}>Turn on</button>
+      </div>
+    </Dialog>
+  );
+}
+
 export function Onboarding({ status, onDone }: { status: Status; onDone: () => void }) {
   const point = (icon: IconName, title: string, text: string) => (
     <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
@@ -201,6 +241,18 @@ function MiniPreview({ dark }: { dark: boolean }) {
 
 function DataPane({ status }: { status: Status }) {
   const [confirm, setConfirm] = useState(false);
+  const [perApp, setPerApp] = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
+  const [offError, setOffError] = useState<string | null>(null);
+  const turnOff = async () => {
+    setOffError(null);
+    try {
+      await api.setPerApp(false);
+      setAskDelete(true);
+    } catch (e) {
+      setOffError(String(e));
+    }
+  };
   const dropped = useLive(() => api.droppedBytes(Date.now() / 1000 - 365 * 86400), []) ?? 0;
   const first = status.firstCoveredHour;
   return (
@@ -218,9 +270,21 @@ function DataPane({ status }: { status: Status }) {
           <span className="num">{bytes(dropped)}</span>
         </Setting>
       )}
+      <Setting title="Per-app tracking" desc="See which apps use data on each network. Runs a small helper process.">
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {status.live.perApp.experimental && <span className="pill muted">Experimental</span>}
+          {offError && <span className="pill warn">{offError}</span>}
+          <Toggle label="Per-app tracking" checked={status.live.perApp.enabled} onChange={(v) => (v ? setPerApp(true) : turnOff())} />
+        </span>
+      </Setting>
       <Setting title="Delete all usage data" desc="Everything stays on this computer. Overlook makes no network requests of its own.">
         <button className="btn danger" onClick={() => setConfirm(true)}><Icon name="trash" size={13} />Delete…</button>
       </Setting>
+      {perApp && <PerAppDialog status={status} onClose={() => setPerApp(false)} />}
+      {askDelete && (
+        <ConfirmDialog title="Delete per-app history?" message="Per-app tracking is off. Delete the recorded per-app usage too, or keep it?" confirm="Delete history"
+          onConfirm={() => api.deleteAppData()} onClose={() => setAskDelete(false)} />
+      )}
       {confirm && (
         <ConfirmDialog title="Delete all usage data?" message="All networks and their history are permanently removed." confirm="Delete all data"
           onConfirm={() => api.deleteAll()} onClose={() => setConfirm(false)} />
