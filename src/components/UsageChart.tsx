@@ -50,7 +50,7 @@ const useWidth = () => {
   return [ref, width] as const;
 };
 
-export function UsageChart({ report, mode, height = 260, compact = false }: { report: Report; mode: SeriesMode; height?: number; compact?: boolean }) {
+export function UsageChart({ report, mode, height = 260, compact = false }: Readonly<{ report: Report; mode: SeriesMode; height?: number; compact?: boolean }>) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
 
@@ -148,7 +148,7 @@ export function UsageChart({ report, mode, height = 260, compact = false }: { re
   );
 }
 
-export function PatternChart({ values, labels, height = 150 }: { values: { rx: number; tx: number }[]; labels: (string | null)[]; height?: number }) {
+export function PatternChart({ values, labels, height = 150 }: Readonly<{ values: { rx: number; tx: number }[]; labels: (string | null)[]; height?: number }>) {
   const [ref, width] = useWidth();
   const max = Math.max(0, ...values.map((v) => v.rx + v.tx));
   const { divisor, unit } = axisUnit(max);
@@ -190,7 +190,7 @@ export function PatternChart({ values, labels, height = 150 }: { values: { rx: n
 
 export type SeriesVisibility = { download: boolean; upload: boolean };
 
-export function TrendChart({ report, show, height = 280 }: { report: Report; show: SeriesVisibility; height?: number }) {
+export function TrendChart({ report, show, height = 280 }: Readonly<{ report: Report; show: SeriesVisibility; height?: number }>) {
   const [ref, width] = useWidth();
   const [hover, setHover] = useState<number | null>(null);
   const buckets = report.buckets;

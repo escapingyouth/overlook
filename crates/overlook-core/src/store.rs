@@ -1,4 +1,5 @@
 
+use crate::caps::Cap;
 use crate::processor::{Baseline, UsageDelta};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -40,6 +41,26 @@ pub struct NetworkTotal {
     pub tx: i64,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppTotal {
+    pub id: i64,
+    pub key: String,
+    pub name: String,
+    pub icon: Option<String>,
+    pub rx: i64,
+    pub tx: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsReport {
+    pub apps: Vec<AppTotal>,
+    pub covered_rx: i64,
+    pub covered_tx: i64,
+    pub since_hour: Option<i64>,
+}
+
 pub struct Store {
     db: Connection,
 }
@@ -70,11 +91,22 @@ impl Store {
                  PRIMARY KEY (network_id, hour)) WITHOUT ROWID;
              CREATE INDEX IF NOT EXISTS usage_hour ON usage(hour);
              CREATE TABLE IF NOT EXISTS coverage (hour INTEGER PRIMARY KEY, seconds REAL NOT NULL);
+             CREATE TABLE IF NOT EXISTS apps (
+                 id INTEGER PRIMARY KEY, key TEXT NOT NULL UNIQUE, name TEXT NOT NULL, icon TEXT);
+             CREATE TABLE IF NOT EXISTS app_usage (
+                 network_id INTEGER NOT NULL, hour INTEGER NOT NULL, app_id INTEGER NOT NULL,
+                 rx INTEGER NOT NULL DEFAULT 0, tx INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (network_id, hour, app_id)) WITHOUT ROWID;
+             CREATE INDEX IF NOT EXISTS app_usage_hour ON app_usage(hour);
+             CREATE TABLE IF NOT EXISTS app_coverage (hour INTEGER PRIMARY KEY, seconds REAL NOT NULL);
              CREATE TABLE IF NOT EXISTS baselines (
                  interface TEXT PRIMARY KEY, boot INTEGER NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
                  network_id INTEGER, at REAL NOT NULL);
              CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, at REAL NOT NULL, bytes INTEGER NOT NULL, reason TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS caps (
+                 id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
+                 limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL);",
         )?;
         Ok(Store { db })
     }
@@ -135,7 +167,9 @@ impl Store {
     pub fn delete_network(&mut self, id: i64) {
         self.transaction(|s| {
             s.db.execute("DELETE FROM usage WHERE network_id = ?", [id]).ok();
+            s.db.execute("DELETE FROM app_usage WHERE network_id = ?", [id]).ok();
             s.db.execute("DELETE FROM networks WHERE id = ?", [id]).ok();
+            s.db.execute("DELETE FROM caps WHERE network_id = ?", [id]).ok();
             s.db.execute("UPDATE baselines SET network_id = NULL WHERE network_id = ?", [id]).ok();
         });
     }
@@ -175,17 +209,79 @@ impl Store {
     }
 
     pub fn add_coverage(&self, from: f64, to: f64) {
+        self.add_coverage_to("coverage", from, to);
+    }
+
+    pub fn add_app_coverage(&self, from: f64, to: f64) {
+        self.add_coverage_to("app_coverage", from, to);
+    }
+
+    fn add_coverage_to(&self, table: &str, from: f64, to: f64) {
+        let sql = format!("INSERT INTO {table} (hour, seconds) VALUES (?, ?) ON CONFLICT(hour) DO UPDATE SET seconds = MIN(3600, seconds + excluded.seconds)");
         let mut cursor = from;
         while cursor < to {
             let hour = hour_of(cursor);
             let end = to.min((hour + 1) as f64 * 3600.0);
-            self.db.execute(
-                "INSERT INTO coverage (hour, seconds) VALUES (?, ?) ON CONFLICT(hour) DO UPDATE SET seconds = MIN(3600, seconds + excluded.seconds)",
-                params![hour, end - cursor],
-            )
-            .ok();
+            self.db.execute(&sql, params![hour, end - cursor]).ok();
             cursor = end;
         }
+    }
+
+    pub fn app_id(&self, key: &str) -> Option<i64> {
+        self.db.query_row("SELECT id FROM apps WHERE key = ?", [key], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    pub fn insert_app(&self, key: &str, name: &str, icon: Option<&str>) -> i64 {
+        self.db.execute("INSERT OR IGNORE INTO apps (key, name, icon) VALUES (?, ?, ?)", params![key, name, icon]).ok();
+        self.app_id(key).unwrap_or(0)
+    }
+
+    pub fn add_app_usage(&self, network_id: i64, app_id: i64, at: f64, rx: u64, tx: u64) {
+        let (rx, tx) = (rx.min(i64::MAX as u64) as i64, tx.min(i64::MAX as u64) as i64);
+        self.db.execute(
+            "INSERT INTO app_usage (network_id, hour, app_id, rx, tx) VALUES (?, ?, ?, ?, ?)
+             ON CONFLICT(network_id, hour, app_id) DO UPDATE SET rx = rx + excluded.rx, tx = tx + excluded.tx",
+            params![network_id, hour_of(at), app_id, rx, tx],
+        )
+        .ok();
+    }
+
+    pub fn apps_report(&self, network: Option<i64>, from_hour: i64, to_hour: i64) -> AppsReport {
+        // network_id = ?3 OR ?3 IS NULL covers both the single-network and all-network cases
+        let mut s = self
+            .db
+            .prepare(
+                "SELECT a.id, a.key, a.name, a.icon, SUM(u.rx), SUM(u.tx) FROM app_usage u JOIN apps a ON a.id = u.app_id
+                 WHERE u.hour BETWEEN ?1 AND ?2 AND (u.network_id = ?3 OR ?3 IS NULL)
+                 GROUP BY a.id ORDER BY SUM(u.rx) + SUM(u.tx) DESC",
+            )
+            .unwrap();
+        let apps = s
+            .query_map(params![from_hour, to_hour, network], |r| {
+                Ok(AppTotal { id: r.get(0)?, key: r.get(1)?, name: r.get(2)?, icon: r.get(3)?, rx: r.get(4)?, tx: r.get(5)? })
+            })
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
+        let (covered_rx, covered_tx) = self
+            .db
+            .query_row(
+                "SELECT COALESCE(SUM(rx), 0), COALESCE(SUM(tx), 0) FROM usage
+                 WHERE hour BETWEEN ?1 AND ?2 AND (network_id = ?3 OR ?3 IS NULL) AND hour IN (SELECT hour FROM app_coverage)",
+                params![from_hour, to_hour, network],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap_or((0, 0));
+        let since_hour = self.db.query_row("SELECT MIN(hour) FROM app_coverage", [], |r| r.get(0)).ok().flatten();
+        AppsReport { apps, covered_rx, covered_tx, since_hour }
+    }
+
+    pub fn delete_app_data(&mut self) {
+        self.transaction(|s| {
+            for table in ["app_usage", "app_coverage", "apps"] {
+                s.db.execute(&format!("DELETE FROM {table}"), []).ok();
+            }
+        });
     }
 
     pub fn coverage(&self, from_hour: i64, to_hour: i64) -> Vec<(i64, f64)> {
@@ -239,20 +335,60 @@ impl Store {
         self.db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [key, value]).ok();
     }
 
+    /// True the first time a key is seen; used so each alert fires once.
+    pub fn mark_once(&self, key: &str) -> bool {
+        self.db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, '1')", [format!("sent:{key}")]).map_or(false, |n| n == 1)
+    }
+
+    pub fn caps(&self) -> Vec<Cap> {
+        let mut s = self.db.prepare("SELECT id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps FROM caps ORDER BY id").unwrap();
+        s.query_map([], |r| {
+            let alerts: String = r.get(5)?;
+            Ok(Cap {
+                id: r.get(0)?, network_id: r.get(1)?, period: r.get(2)?, reset: r.get(3)?, limit_bytes: r.get(4)?,
+                alerts: alerts.split(',').filter_map(|a| a.parse().ok()).collect(), action: r.get(6)?, throttle_kbps: r.get(7)?,
+            })
+        })
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect()
+    }
+
+    pub fn save_cap(&self, c: &Cap) {
+        let alerts = c.alerts.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let id = (c.id > 0).then_some(c.id);
+        // A changed limit or threshold should be able to alert again this period.
+        self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{}:%", c.id)]).ok();
+        self.db
+            .execute(
+                "INSERT OR REPLACE INTO caps (id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![id, c.network_id, c.period, c.reset, c.limit_bytes.max(1), alerts, c.action, c.throttle_kbps.max(64)],
+            )
+            .ok();
+    }
+
+    pub fn delete_cap(&self, id: i64) {
+        self.db.execute("DELETE FROM caps WHERE id = ?", [id]).ok();
+        self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{id}:%")]).ok();
+    }
+
     pub fn prune(&mut self, before: f64) {
         let hour = hour_of(before);
         self.transaction(|s| {
             s.db.execute("DELETE FROM usage WHERE hour < ?", [hour]).ok();
             s.db.execute("DELETE FROM coverage WHERE hour < ?", [hour]).ok();
+            s.db.execute("DELETE FROM app_usage WHERE hour < ?", [hour]).ok();
+            s.db.execute("DELETE FROM app_coverage WHERE hour < ?", [hour]).ok();
             s.db.execute("DELETE FROM dropped WHERE at < ?", [before]).ok();
         });
     }
 
     pub fn delete_all(&mut self) {
         self.transaction(|s| {
-            for table in ["usage", "coverage", "networks", "baselines", "dropped"] {
+            for table in ["usage", "coverage", "app_usage", "app_coverage", "apps", "networks", "baselines", "dropped"] {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
+            s.db.execute("DELETE FROM caps WHERE network_id IS NOT NULL", []).ok();
         });
         self.db.execute_batch("VACUUM").ok();
     }
@@ -318,5 +454,78 @@ mod tests {
         let b = Baseline { interface: "en0".into(), boot_time: 5, rx: u64::MAX - 10, tx: 3, network_id: None, at: 1000.0 };
         s.save_baseline(&b);
         assert_eq!(s.baseline("en0"), Some(b));
+    }
+
+    #[test] fn app_usage_upserts_and_sorts_per_network() {
+        let s = store();
+        let (a, b) = (s.insert_app("/A.app", "A", None), s.insert_app("/B.app", "B", Some("icon")));
+        assert_eq!(s.app_id("/A.app"), Some(a));
+        assert_eq!(s.app_id("/nope"), None);
+        let t = 1_800_000_000.0;
+        let h = hour_of(t);
+        s.add_app_usage(1, a, t, 100, 10);
+        s.add_app_usage(1, a, t, 100, 10);
+        s.add_app_usage(1, b, t, 500, 0);
+        s.add_app_usage(2, a, t, 7, 0);
+        let r = s.apps_report(Some(1), h, h);
+        let got: Vec<_> = r.apps.iter().map(|x| (x.key.as_str(), x.rx, x.tx)).collect();
+        assert_eq!(got, vec![("/B.app", 500, 0), ("/A.app", 200, 20)]);
+        assert_eq!(r.apps[0].icon.as_deref(), Some("icon"));
+        let all = s.apps_report(None, h, h);
+        let a_tot = all.apps.iter().find(|x| x.id == a).unwrap();
+        assert_eq!(a_tot.rx + a_tot.tx, 227);
+        assert_eq!(all.apps.iter().find(|x| x.id == b).unwrap().rx, 500);
+    }
+
+    #[test] fn delete_network_removes_its_app_usage() {
+        let mut s = store();
+        let a = s.insert_app("/A.app", "A", None);
+        let t = 1_800_000_000.0;
+        let h = hour_of(t);
+        s.add_app_usage(1, a, t, 100, 10);
+        s.add_app_usage(2, a, t, 7, 0);
+        s.delete_network(1);
+        assert!(s.apps_report(Some(1), h, h).apps.is_empty());
+        let all = s.apps_report(None, h, h);
+        assert_eq!(all.apps.iter().map(|x| x.rx).collect::<Vec<_>>(), vec![7]);
+    }
+
+    #[test] fn covered_totals_only_count_app_covered_hours() {
+        let s = store();
+        let h0 = hour_of(1_800_000_000.0);
+        let h1 = h0 + 1;
+        for (h, rx) in [(h0, 1000), (h1, 300)] {
+            s.add(&UsageDelta { network_id: 1, rx, tx: 0, estimated: false, at: h as f64 * 3600.0 });
+        }
+        s.add_app_coverage(h1 as f64 * 3600.0, h1 as f64 * 3600.0 + 60.0);
+        let r = s.apps_report(Some(1), h0, h1);
+        assert_eq!((r.covered_rx, r.since_hour), (300, Some(h1)));
+        let r = s.apps_report(None, h0, h1);
+        assert_eq!((r.covered_rx, r.since_hour), (300, Some(h1)));
+    }
+
+    #[test] fn prune_and_delete_app_data_clear_app_tables() {
+        let mut s = store();
+        let t = 1_800_000_000.0;
+        let h = hour_of(t);
+        let fill = |s: &Store| {
+            let a = s.insert_app("/A.app", "A", None);
+            s.add_app_usage(1, a, t, 1, 1);
+            s.add_app_coverage(t, t + 10.0);
+        };
+        fill(&s);
+        s.prune(t + 7200.0);
+        let r = s.apps_report(None, h - 1, h + 1);
+        assert!(r.apps.is_empty() && r.since_hour.is_none());
+        s.delete_app_data();
+        s.delete_app_data();
+        s.add_app_coverage(t, t + 10.0);
+        s.delete_app_data();
+        assert_eq!(s.app_id("/A.app"), None);
+        fill(&s);
+        s.delete_app_data();
+        let r = s.apps_report(None, h - 1, h + 1);
+        assert!(r.apps.is_empty() && r.since_hour.is_none());
+        assert_eq!(s.app_id("/A.app"), None);
     }
 }

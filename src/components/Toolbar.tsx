@@ -3,7 +3,7 @@ import { hourOf, queryStartHour, RANGES, RangeId, rangeInfo, rangeInterval } fro
 import { api, displayName, Network } from "../lib/api";
 import { Icon } from "./Icon";
 
-export function RangeMenu({ value, onChange }: { value: RangeId; onChange: (r: RangeId) => void }) {
+export function RangeMenu({ value, onChange }: Readonly<{ value: RangeId; onChange: (r: RangeId) => void }>) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -48,7 +48,7 @@ export function RangeMenu({ value, onChange }: { value: RangeId; onChange: (r: R
 
 const csvField = (v: string | number) => (typeof v === "string" && /[",\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : String(v));
 
-export function ExportButton({ network, range }: { network: Network | null; range: RangeId }) {
+export function ExportButton({ network, range }: Readonly<{ network: Network | null; range: RangeId }>) {
   const [busy, setBusy] = useState(false);
   const run = async () => {
     setBusy(true);

@@ -1,16 +1,18 @@
 import { createContext, useContext, useState } from "react";
 import { GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useLive, useReport } from "../lib/api";
+import { api, displayName, Network, Status, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
+import { CapsCard } from "./Caps";
+import { TopApps } from "./TopApps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy }: {
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onEnablePerApp }: Readonly<{
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -18,7 +20,9 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onSelect: (id: number) => void;
   onRename: (n: Network) => void;
   onAccuracy: () => void;
-}) {
+  onCaps: () => void;
+  onEnablePerApp: () => void;
+}>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
@@ -38,6 +42,8 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
         <KpiCard icon="average" title="Daily average" value={report.dailyAverage} previous={null}
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
+
+      <CapsCard status={status} network={network} onManage={onCaps} />
 
       <div className="main-grid">
         <SplitDonut report={report} />
@@ -65,6 +71,8 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           <TrendChart report={report} show={show} height={narrow ? 240 : 290} />
         </section>
       </div>
+
+      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp} />
 
       {network ? <DaysTable report={report} /> : <NetworksTable status={status} report={report} onSelect={onSelect} />}
 
@@ -94,17 +102,18 @@ function weekOrder() {
   return Array.from({ length: 7 }, (_, i) => (first + i) % 7);
 }
 
-function Peak({ report }: { report: Report }) {
+function Peak({ report }: Readonly<{ report: Report }>) {
   const peak = report.buckets.reduce<Report["buckets"][number] | null>(
     (m, b) => ((b.rx ?? 0) + (b.tx ?? 0) > (m ? (m.rx ?? 0) + (m.tx ?? 0) : 0) ? b : m), null);
   return <>{peak ? `Peak ${bytes((peak.rx ?? 0) + (peak.tx ?? 0))} · ${bucketTitle(peak, report.granularity)}` : "No usage yet"}</>;
 }
 
-function PageHead({ status, network }: { status: Status; network: Network | null }) {
+function PageHead({ status, network }: Readonly<{ status: Status; network: Network | null }>) {
   const active = network ? status.live.active.find((a) => a.networkId === network.id) : status.live.active.find((a) => a.networkId === status.live.primary);
   const current = status.networks.find((n) => n.id === status.live.primary);
   const live = network ? !!active : !!current;
-  const showRate = status.live.rate && (network ? status.live.primary === network.id : true);
+  const now = useRate(status.live.rate);
+  const showRate = now && (network ? status.live.primary === network.id : true);
   return (
     <div className="page-head">
       <div style={{ minWidth: 0 }}>
@@ -117,23 +126,23 @@ function PageHead({ status, network }: { status: Status; network: Network | null
         </div>
       </div>
       {showRate && (
-        <span className="rate num" title={`Average over the last ${status.sampleInterval} seconds`}>
-          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(status.live.rate![0])}</span>
-          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(status.live.rate![1])}</span>
+        <span className="rate num" title="Updated every second">
+          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(now![0])}</span>
+          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(now![1])}</span>
         </span>
       )}
     </div>
   );
 }
 
-function DeltaPill({ value, previous, report }: { value: number | null; previous: number | null; report: Report }) {
+function DeltaPill({ value, previous, report }: Readonly<{ value: number | null; previous: number | null; report: Report }>) {
   if (value === null || previous === null || previous === 0) return null;
   const change = (value - previous) / previous;
   const text = Math.abs(change) < 0.0005 ? "±0%" : `${change > 0 ? "+" : "−"}${percent(Math.abs(change))}`;
   return <span className="delta-pill num" title={`vs ${bytes(previous)} in the ${rangeInfo(report.range).previous}`}>{text}</span>;
 }
 
-function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title: string; value: number | null; previous: number | null; note?: string }) {
+function KpiCard({ icon, title, value, previous, note }: Readonly<{ icon: IconName; title: string; value: number | null; previous: number | null; note?: string }>) {
   const report = useReportContext();
   return (
     <section className="kpi-card">
@@ -150,13 +159,13 @@ function KpiCard({ icon, title, value, previous, note }: { icon: IconName; title
   );
 }
 
-function SplitDonut({ report }: { report: Report }) {
+function SplitDonut({ report }: Readonly<{ report: Report }>) {
   const [v, unit] = scaled(report.total);
   const item = (icon: IconName, label: string, value: number, color: string) => (
     <div className="result">
       <span className="icon-tile lg" style={{ color }}><Icon name={icon} size={18} /></span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6 }}>
           <span className="num" style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>{bytes(value)}</span>
           <span className="faint num" style={{ fontSize: 12 }}>{report.total ? percent(value / report.total) : "—"}</span>
         </div>
@@ -190,7 +199,7 @@ function SplitDonut({ report }: { report: Report }) {
   );
 }
 
-function NetworksTable({ status, report, onSelect }: { status: Status; report: Report; onSelect: (id: number) => void }) {
+function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void }>) {
   const totals = useLive(() => api.totals(hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1), [report.start.getTime()]) ?? [];
   const rows = status.networks
     .map((n) => {
@@ -228,7 +237,7 @@ function NetworksTable({ status, report, onSelect }: { status: Status; report: R
   );
 }
 
-function DaysTable({ report }: { report: Report }) {
+function DaysTable({ report }: Readonly<{ report: Report }>) {
   const days = [...report.days].reverse().slice(0, 14);
   const today = new Date().toDateString();
   return (
@@ -267,7 +276,7 @@ function DaysTable({ report }: { report: Report }) {
   );
 }
 
-function HighlightsCard({ report }: { report: Report }) {
+function HighlightsCard({ report }: Readonly<{ report: Report }>) {
   const day = (d: Date) => fmtDate(d, { weekday: "short", month: "short", day: "numeric" });
   const item = (label: string, value: number | null, detail?: string) => (
     <div className="list-row">
@@ -286,7 +295,7 @@ function HighlightsCard({ report }: { report: Report }) {
   );
 }
 
-function NetworkCard({ network, status, onRename }: { network: Network; status: Status; onRename: (n: Network) => void }) {
+function NetworkCard({ network, status, onRename }: Readonly<{ network: Network; status: Status; onRename: (n: Network) => void }>) {
   const live = status.live.active.some((a) => a.networkId === network.id);
   const when = (s: number) => fmtDate(new Date(s * 1000), { dateStyle: "medium", timeStyle: "short" });
   const item = (label: string, value: string, help?: string) => (
@@ -306,7 +315,7 @@ function NetworkCard({ network, status, onRename }: { network: Network; status: 
   );
 }
 
-function Footnote({ report, network, onAccuracy }: { report: Report; network: Network | null; onAccuracy: () => void }) {
+function Footnote({ report, network, onAccuracy }: Readonly<{ report: Report; network: Network | null; onAccuracy: () => void }>) {
   const dropped = useLive(() => api.droppedBytes(report.start.getTime() / 1000), [report.start.getTime()]) ?? 0;
   const parts = ["Measured from interface byte counters, including local-network traffic."];
   if (report.estimated > 0) parts.push(`${bytes(report.estimated)} is estimated (attributed across a network switch or a sleep/restart gap).`);

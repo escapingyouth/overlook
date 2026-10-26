@@ -1,10 +1,11 @@
 import { hourOf, startOf } from "./lib/analytics";
-import { api, displayName, useLive, useReport, useStatus } from "./lib/api";
+import { api, displayName, useCaps, useLive, useRate, useReport, useStatus } from "./lib/api";
 import { bytes, rate } from "./lib/format";
 import { useAppearance } from "./lib/theme";
 import { Icon, kindIcon } from "./components/Icon";
 import { Bytes } from "./components/ui";
 import { UsageChart } from "./components/UsageChart";
+import { CapCompact, capsFor } from "./components/Caps";
 
 export default function Tray() {
   useAppearance();
@@ -12,6 +13,9 @@ export default function Tray() {
   const id = status?.live.primary ?? null;
   const network = status?.networks.find((n) => n.id === id);
   const active = status?.live.active.find((a) => a.networkId === id);
+  // The popover is fixed-height, so only the cap closest to running out.
+  const caps = capsFor(useCaps() ?? [], id).sort((a, b) => b.used / b.limitBytes - a.used / a.limitBytes).slice(0, 1);
+  const now = useRate(status?.live.rate ?? null);
   const report = useReport(id, "day", undefined, status?.firstCoveredHour ?? null);
   const today = useLive(async () => {
     if (id === null) return { rx: 0, tx: 0 };
@@ -46,6 +50,8 @@ export default function Tray() {
         </div>
       )}
 
+      {network && caps.map((c) => <CapCompact key={c.id} cap={c} networks={status.networks} />)}
+
       {network && report && (
         <div>
           <div className="stat-label" style={{ justifyContent: "space-between", marginBottom: 6 }}>
@@ -56,12 +62,12 @@ export default function Tray() {
         </div>
       )}
 
-      {status.live.rate && network && (
+      {now && network && (
         <div className="stat-label" style={{ justifyContent: "space-between" }}>
           <span>Now</span>
           <span className="rate num">
-            <span><Icon name="down" size={12} style={{ color: "var(--download)" }} />{rate(status.live.rate[0])}</span>
-            <span><Icon name="up" size={12} style={{ color: "var(--upload)" }} />{rate(status.live.rate[1])}</span>
+            <span><Icon name="down" size={12} style={{ color: "var(--download)" }} />{rate(now[0])}</span>
+            <span><Icon name="up" size={12} style={{ color: "var(--upload)" }} />{rate(now[1])}</span>
           </span>
         </div>
       )}

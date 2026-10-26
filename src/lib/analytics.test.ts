@@ -1,7 +1,7 @@
 process.env.TZ = "America/New_York";
 
 import { describe, expect, it } from "vitest";
-import { buildReport, bucketTotal, HourRow, hourOf, rangeInterval, RangeId, startOf } from "./analytics";
+import { buildReport, bucketTotal, capForecast, HourRow, hourOf, rangeInterval, RangeId, startOf } from "./analytics";
 import { bytes, niceTicks } from "./format";
 
 const d = (s: string) => new Date(s);
@@ -101,5 +101,20 @@ describe("format", () => {
   it("makes nice ticks", () => {
     expect(niceTicks(3.7)).toEqual([0, 1, 2, 3, 4]);
     expect(niceTicks(860, 4)).toEqual([0, 250, 500, 750, 1000]);
+  });
+});
+
+describe("cap forecast", () => {
+  const cap = { limitBytes: 100, start: 0, end: 1000 };
+  it("projects the current pace to the reset", () => {
+    const f = capForecast({ ...cap, used: 30 }, 500);
+    expect(f).toEqual({ share: 0.3, elapsed: 0.5, projected: 60, runsOutAt: null });
+  });
+  it("predicts when a fast pace runs out", () => {
+    expect(capForecast({ ...cap, used: 80 }, 400).runsOutAt).toBe(500);
+  });
+  it("stays quiet early in the period and once the cap is used up", () => {
+    expect(capForecast({ ...cap, used: 5 }, 50).projected).toBeNull();
+    expect(capForecast({ ...cap, used: 120 }, 900).runsOutAt).toBeNull();
   });
 });

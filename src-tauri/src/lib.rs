@@ -1,13 +1,19 @@
+mod helper;
+
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{mpsc, Mutex};
 use std::time::Duration;
-use overlook_core::store::{HourRow, Network, NetworkTotal, Store};
+use overlook_core::apps::AppTracker;
+use overlook_core::caps::{self, Cap, CapUsage, Verdict};
+use overlook_core::enforce::{self, Enforcer};
+use overlook_core::store::{AppsReport, HourRow, Network, NetworkTotal, Store};
 use overlook_core::system::{self, WifiNameAccess};
 use overlook_core::{Collector, LiveStatus, SAMPLE_INTERVAL};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
+use tauri_plugin_notification::NotificationExt;
 use tauri_plugin_positioner::{Position, WindowExt};
 
 struct AppState {
@@ -25,6 +31,8 @@ struct Status {
     platform: &'static str,
     sample_interval: f64,
     retention_months: i64,
+    upload_alerts: bool,
+    can_throttle: bool,
 }
 
 #[derive(Serialize)]
@@ -48,6 +56,8 @@ fn status(state: State<AppState>) -> Status {
         platform: std::env::consts::OS,
         sample_interval: SAMPLE_INTERVAL,
         retention_months: retention(&c.store),
+        upload_alerts: c.store.meta("upload_alerts").as_deref() != Some("0"),
+        can_throttle: enforce::CAN_THROTTLE,
     }
 }
 
@@ -65,6 +75,35 @@ fn totals(state: State<AppState>, from_hour: i64, to_hour: i64) -> Vec<NetworkTo
 #[tauri::command]
 fn dropped_bytes(state: State<AppState>, since: f64) -> i64 {
     state.collector.lock().unwrap().store.dropped_bytes(since)
+}
+
+#[tauri::command]
+fn apps(state: State<AppState>, network: Option<i64>, from_hour: i64, to_hour: i64) -> AppsReport {
+    state.collector.lock().unwrap().store.apps_report(network, from_hour, to_hour)
+}
+
+// async so the elevation prompt doesn't block the main thread; the collector isn't locked while it's up.
+#[tauri::command]
+async fn set_per_app(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    helper::set_installed(enabled)?;
+    {
+        let mut c = state.collector.lock().unwrap();
+        c.store.set_meta("per_app", if enabled { "on" } else { "off" });
+        c.per_app = enabled;
+        c.status.per_app.enabled = enabled;
+        c.status.per_app.error = None;
+        if !enabled {
+            c.tracker = AppTracker::default();
+        }
+    }
+    app.emit("overlook://changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_app_data(app: AppHandle, state: State<AppState>) {
+    state.collector.lock().unwrap().store.delete_app_data();
+    app.emit("overlook://changed", ()).ok();
 }
 
 #[tauri::command]
@@ -90,6 +129,29 @@ fn set_retention(app: AppHandle, state: State<AppState>, months: i64) {
     let mut c = state.collector.lock().unwrap();
     c.store.set_meta("retention_months", &months.to_string());
     prune(&mut c.store);
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
+fn caps(state: State<AppState>) -> Vec<CapUsage> {
+    caps::usage(&state.collector.lock().unwrap().store, overlook_core::now())
+}
+
+#[tauri::command]
+fn save_cap(app: AppHandle, state: State<AppState>, cap: Cap) {
+    state.collector.lock().unwrap().store.save_cap(&cap);
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
+fn delete_cap(app: AppHandle, state: State<AppState>, id: i64) {
+    state.collector.lock().unwrap().store.delete_cap(id);
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
+fn set_upload_alerts(app: AppHandle, state: State<AppState>, on: bool) {
+    state.collector.lock().unwrap().store.set_meta("upload_alerts", if on { "1" } else { "0" });
     app.emit("overlook://changed", ()).ok();
 }
 
@@ -176,6 +238,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, Some(vec!["--background"])))
         .plugin(tauri_plugin_positioner::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             let dir = std::env::var("OVERLOOK_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(&dir)?;
@@ -183,17 +246,66 @@ pub fn run() {
             migrate_legacy(&db_path);
             let mut store = Store::open(&db_path.to_string_lossy())?;
             prune(&mut store);
+            let shaped = store.meta("throttled").unwrap_or_default();
             let mut collector = Collector::new(store);
             collector.tick();
             app.manage(AppState { collector: Mutex::new(collector), db_path });
+
+            // Enforcement can sit on an admin password prompt, so it gets its own thread and only acts on the latest verdict.
+            let (enforce_tx, enforce_rx) = mpsc::channel::<Verdict>();
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut enforcer = Enforcer::restore(&shaped);
+                while let Ok(mut verdict) = enforce_rx.recv() {
+                    while let Ok(newer) = enforce_rx.try_recv() {
+                        verdict = newer;
+                    }
+                    let before = enforcer.saved();
+                    enforcer.apply(&verdict.block, &verdict.throttle);
+                    if enforcer.saved() != before {
+                        handle.state::<AppState>().collector.lock().unwrap().store.set_meta("throttled", &enforcer.saved());
+                    }
+                }
+            });
 
             let handle = app.handle().clone();
             std::thread::spawn(move || loop {
                 std::thread::sleep(Duration::from_secs(5));
                 let state = handle.state::<AppState>();
-                let sampled = state.collector.lock().unwrap().tick();
-                if sampled {
+                let verdict = {
+                    let mut c = state.collector.lock().unwrap();
+                    c.tick().then(|| caps::evaluate(&c.store, &c.status.active, overlook_core::now()))
+                };
+                if let Some(verdict) = verdict {
+                    for n in &verdict.notices {
+                        handle.notification().builder().title(&n.title).body(&n.body).show().ok();
+                    }
+                    enforce_tx.send(verdict).ok();
                     handle.emit("overlook://changed", ()).ok();
+                }
+            });
+
+            // Live rate: cheap per-second counter diff on the primary interface, never touches the store.
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                let mut last: Option<(String, system::Counter, std::time::Instant)> = None;
+                loop {
+                    std::thread::sleep(Duration::from_secs(1));
+                    let primary = {
+                        let state = handle.state::<AppState>();
+                        let c = state.collector.lock().unwrap();
+                        c.status.active.iter().find(|a| Some(a.network_id) == c.status.primary).map(|a| a.interface.clone())
+                    };
+                    let Some(name) = primary else { last = None; continue };
+                    let Some(now) = system::counter(&name) else { last = None; continue };
+                    let at = std::time::Instant::now();
+                    if let Some((prev_name, prev, prev_at)) = &last {
+                        let secs = at.duration_since(*prev_at).as_secs_f64();
+                        if *prev_name == name && now.rx >= prev.rx && now.tx >= prev.tx && secs > 0.0 {
+                            handle.emit("overlook://rate", ((now.rx - prev.rx) as f64 / secs, (now.tx - prev.tx) as f64 / secs)).ok();
+                        }
+                    }
+                    last = Some((name, now, at));
                 }
             });
 
@@ -244,8 +356,8 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            status, usage, totals, dropped_bytes, rename_network, delete_network, delete_all,
-            set_retention, request_wifi_names, reveal_data, save_export, show_main, quit
+            status, usage, totals, apps, set_per_app, delete_app_data, dropped_bytes, rename_network, delete_network, delete_all,
+            set_retention, caps, save_cap, delete_cap, set_upload_alerts, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Overlook");

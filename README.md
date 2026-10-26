@@ -11,26 +11,57 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, storage (24 tests)
-npm test                              # ranges, buckets, statistics (12 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (45 tests)
+cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
+cargo test --workspace                   # everything, including the shell (56 tests)
+npm test                              # ranges, buckets, statistics, per-app (21 tests)
 ```
 
-Build each OS's installer on that OS (or in CI with a matrix). The core crate type-checks for all three targets from any host:
+On Linux and Windows the per-app helper sidecar is built by `node scripts/build-helper.mjs`. `npm run tauri dev` and `npm run tauri build` run it automatically; run it by hand before a bare `cargo build -p overlook`.
+
+Build each OS's installer on that OS; the release workflow (below) does all three in CI. The core crate type-checks for all three targets from any host:
 `cargo check -p overlook-core --no-default-features --target x86_64-pc-windows-msvc`.
 
 Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?platform=windows&access=denied` (or `#tray`). In that mode a dev-only mock (`src/dev/mock.ts`) supplies synthetic history; it is never included in a build.
+
+## Branches & releases
+- `main` is what ships. Releases are only ever built from it.
+- `dev` collects finished work before it goes to `main`.
+- `dev` is the default branch. Work happens on a branch off `dev` (for example `feat/top-apps`), merged back with a pull request.
+
+Both `main` and `dev` are protected by repository rulesets: changes land only through pull requests that pass CI, and force pushes and branch deletion are blocked. No one is exempt, admins included.
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request to, and push to, `main` and `dev`. On macOS, Windows and Linux (Ubuntu 22.04) it builds the helper and UI, then runs `npm test` and `cargo test --workspace`. All three jobs are required checks.
+
+To release:
+1. Bump the version in a pull request to `dev`. `src-tauri/tauri.conf.json` sets the release version; keep `package.json` and `src-tauri/Cargo.toml` in step.
+2. Open a pull request from `dev` to `main` and merge it.
+3. Tag the merged commit on `main` and push the tag:
+   ```sh
+   git switch main && git pull
+   git tag v2.1.0 && git push origin v2.1.0
+   ```
+4. [`.github/workflows/release.yml`](.github/workflows/release.yml) first checks that the tagged commit is on `main`, and stops if it isn't. It then builds macOS (universal `.app`/`.dmg`), Windows (`.msi`/`.exe`) and Linux (`.deb`/`.rpm`/`.AppImage`, built on Ubuntu 22.04) and attaches them to a **draft** GitHub release. Review the draft and publish it.
+
+macOS builds are unsigned until the Apple secrets in the workflow are set, so Gatekeeper warns on first open.
 
 ## Architecture
 ```
 crates/overlook-core   Rust, no UI. Unit-tested.
   system.rs         per-OS counters, boot time, physical-adapter filter, router MAC, Wi-Fi names, permission
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
-  store.rs          SQLite (hourly buckets; same schema as earlier versions)
+  apps.rs           per-app snapshot types, app keys, delta tracking
+  nstat.c           macOS per-app byte counts from NetworkStatistics (built only for macOS)
+  store.rs          SQLite (hourly buckets; adds apps, app_usage and app_coverage tables for per-app)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
+  caps.rs           data caps (day/week/month, per network or all), threshold + unusual-upload alerts
+  enforce.rs        when a cap runs out: disconnect Wi-Fi, or throttle via pf/dummynet (macOS) or tc (Linux)
+crates/overlook-helper  Windows (ETW) / Linux (sock_diag) per-app sidecar, run as a service
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
 src                 React UI, custom components (no UI or chart library; Hugeicons for icons)
   lib/analytics.ts  ranges, calendar buckets, stats (runs in the UI so DST/week starts use the OS's rules)
-  components/       Dashboard, UsageChart (SVG), Dialogs/Settings, ui primitives, Icon (Hugeicons)
+  lib/apps.ts       per-app shares and grouping for the Top apps table
+  components/       Dashboard, UsageChart (SVG), Dialogs/Settings, TopApps, ui primitives, Icon (Hugeicons)
   Tray.tsx          tray popover
 ```
 
@@ -42,6 +73,7 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 | Router MAC | configd `ARPResolvedHardwareAddress` | IP Helper `SendARP` (via netdev) | netdev gateway, else `/proc/net/arp` |
 | Wi-Fi name | CoreWLAN (needs Location) | `netsh wlan` (Win 11 needs Location) | `iw` or `nmcli` |
 | Boot time | `kern.boottime` | `GetTickCount64` | `/proc/stat btime` |
+| Per-app bytes | NetworkStatistics (nettop's private framework, loaded at runtime; Wi-Fi + wired bytes, closed connections included) | ETW kernel network events via a helper service (experimental) | `sock_diag` TCP via a root helper (experimental) |
 
 - **Identity.** A network's key is `wifi:<SSID>` or `router:<MAC>`, never the adapter name alone. If a network later gains or loses its SSID, it keeps one history, matched by router MAC.
 - **Sampling.** The collector checks network identity every 5 s and records a sample every 30 s, or immediately when the identity changes. That keeps any ambiguity around a network switch to a few seconds.
@@ -50,14 +82,42 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 - **Gaps.** A coverage table records when collection was running. Untracked periods render as no bar and no track, never as zero.
 - **VPNs.** Tunnel and virtual adapters are excluded, so VPN traffic is counted once, on the physical adapter that carries it.
 
+### Per-app helper (Windows and Linux)
+Turning per-app tracking on asks for admin rights once and installs a helper that runs as SYSTEM/root and starts at boot, even when Overlook isn't open. Turning per-app tracking off stops and removes it. macOS needs no helper.
+
+| | Windows | Linux |
+|---|---|---|
+| Binary | `%ProgramFiles%\Overlook Helper\` | `/usr/local/libexec/overlook-helper` |
+| Service | `OverlookHelper` | systemd unit `overlook-helper.service` |
+| Snapshot file | `C:\ProgramData\Overlook\counters.json` | `/run/overlook-helper/counters.json` |
+
+Turn per-app tracking off before uninstalling Overlook. If you've already uninstalled it, remove the helper by hand:
+
+```sh
+# Linux
+sudo systemctl disable --now overlook-helper
+sudo rm -f /etc/systemd/system/overlook-helper.service /usr/local/libexec/overlook-helper
+sudo systemctl daemon-reload
+```
+
+```powershell
+# Windows, in an elevated PowerShell
+Stop-Service OverlookHelper -Force; sc.exe delete OverlookHelper
+Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramData\Overlook"
+```
+
 ### Limitations
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
-- There's no per-app breakdown.
+- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB.
+- Per-app tracking is opt-in and only counts from when it's turned on.
+- On macOS, per-app counts closed connections too, including short downloads that open and close between samples. It uses NetworkStatistics, a private Apple framework that a future macOS may change or remove; if it does, per-app shows an error and network totals are unaffected.
+- On Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. It also counts TCP only (UDP/QUIC lands in System).
+- macOS apps whose icon lives only in an asset catalog get a generic icon.
 - Two different networks with the same SSID share one history.
 - Windows doesn't report whether Location access was granted, so if an SSID can't be read the network falls back to its router name.
 - Linux SSIDs need `iw` or NetworkManager installed.
-- **Verification:** the Windows and Linux paths compile and are covered by parser unit tests, but they haven't been run on those operating systems.
+- **Verification:** the Windows and Linux paths compile and are covered by parser unit tests, but they haven't been run on those operating systems. That includes the per-app helpers, which are experimental.
 
 ## Design
 - **Dark mode** is its own palette, not an inversion:

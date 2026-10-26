@@ -5,13 +5,14 @@ import { ago } from "./lib/format";
 import { useAppearance } from "./lib/theme";
 import { Dashboard } from "./components/Dashboard";
 import { Icon, kindIcon } from "./components/Icon";
-import { Onboarding, RenameDialog, ConfirmDialog, Settings } from "./components/Dialogs";
+import { Onboarding, RenameDialog, ConfirmDialog, PerAppDialog, Settings } from "./components/Dialogs";
 import { ExportButton, RangeMenu } from "./components/Toolbar";
 
 type Overlay =
   | { kind: "settings"; tab?: string }
   | { kind: "rename"; network: Network }
   | { kind: "delete"; network: Network }
+  | { kind: "perApp" }
   | null;
 
 export default function App() {
@@ -70,7 +71,9 @@ export default function App() {
           ) : (
             <Dashboard key={`${network?.id}-${range}`} status={status} network={network} range={range} narrow={narrow}
               onSelect={setSelection} onRename={(n) => setOverlay({ kind: "rename", network: n })}
-              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })} />
+              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })}
+              onCaps={() => setOverlay({ kind: "settings", tab: "caps" })}
+              onEnablePerApp={() => setOverlay({ kind: "perApp" })} />
           )}
         </div>
       </main>
@@ -78,6 +81,7 @@ export default function App() {
       {overlay?.kind === "settings" && (
         <Settings status={status} initialTab={overlay.tab} appearance={appearance} onAppearance={setAppearance} onClose={() => setOverlay(null)} />
       )}
+      {overlay?.kind === "perApp" && <PerAppDialog status={status} onClose={() => setOverlay(null)} />}
       {overlay?.kind === "rename" && <RenameDialog network={overlay.network} onClose={() => setOverlay(null)} />}
       {overlay?.kind === "delete" && (
         <ConfirmDialog
@@ -100,14 +104,14 @@ export default function App() {
   );
 }
 
-function Sidebar({ status, selected, onSelect, onSettings, onRename, onDelete }: {
+function Sidebar({ status, selected, onSelect, onSettings, onRename, onDelete }: Readonly<{
   status: Status;
   selected: number | null;
   onSelect: (id: number | null) => void;
   onSettings: () => void;
   onRename: (n: Network) => void;
   onDelete: (n: Network) => void;
-}) {
+}>) {
   const [menu, setMenu] = useState<{ n: Network; x: number; y: number } | null>(null);
   const showNotice = status.wifiNameAccess === "denied" || status.wifiNameAccess === "notDetermined";
   return (

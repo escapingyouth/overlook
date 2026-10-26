@@ -1,15 +1,22 @@
 import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
+  ArrowLeft01Icon,
   BinocularsIcon,
+  DashboardSpeed01Icon,
+  Notification03Icon,
+  PlusSignIcon,
+  UnavailableIcon,
   ArrowDataTransferVerticalIcon,
   ArrowDown01Icon,
   Calendar03Icon,
-  ChartAverageIcon,
+  ChartBarLineIcon,
   CheckmarkCircle02Icon,
   Clock01Icon,
   CloudDownloadIcon,
   CloudUploadIcon,
+  ComputerIcon,
+  CubeIcon,
   Download04Icon,
   Tick02Icon,
   ArrowDown02Icon,
@@ -58,18 +65,25 @@ const icons = {
   chevron: ArrowDown01Icon,
   export: Download04Icon,
   check: Tick02Icon,
-  average: ChartAverageIcon,
+  average: ChartBarLineIcon,
   cloudDown: CloudDownloadIcon,
   cloudUp: CloudUploadIcon,
   alert: Alert02Icon,
   ok: CheckmarkCircle02Icon,
   clock: Clock01Icon,
   binoculars: BinocularsIcon,
+  bell: Notification03Icon,
+  block: UnavailableIcon,
+  gauge: DashboardSpeed01Icon,
+  plus: PlusSignIcon,
+  back: ArrowLeft01Icon,
+  app: CubeIcon,
+  computer: ComputerIcon,
 } as const;
 
 export type IconName = keyof typeof icons;
 
-export function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: React.CSSProperties }) {
+export function Icon({ name, size = 16, className, style }: Readonly<{ name: IconName; size?: number; className?: string; style?: React.CSSProperties }>) {
   return <HugeiconsIcon icon={icons[name]} size={size} strokeWidth={1.6} color="currentColor" className={`icon ${className ?? ""}`} style={style} aria-hidden />;
 }
 

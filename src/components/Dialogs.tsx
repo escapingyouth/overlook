@@ -4,9 +4,13 @@ import { api, displayName, Network, Status, useLive } from "../lib/api";
 import { bytes } from "../lib/format";
 import { Appearance } from "../lib/theme";
 import { Icon, IconName } from "./Icon";
-import { Dialog, Segmented, Toggle } from "./ui";
+import { CapsPane } from "./Caps";
+import { Dialog, Segmented, Setting, Toggle } from "./ui";
 
-export function RenameDialog({ network, onClose }: { network: Network; onClose: () => void }) {
+// Tauri commands reject with a string; anything else (the dev mock) throws an Error.
+const errorText = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+export function RenameDialog({ network, onClose }: Readonly<{ network: Network; onClose: () => void }>) {
   const [name, setName] = useState(displayName(network));
   const save = (value: string | null) => {
     api.rename(network.id, value);
@@ -17,7 +21,7 @@ export function RenameDialog({ network, onClose }: { network: Network; onClose: 
       <form className="dialog-body" onSubmit={(e) => { e.preventDefault(); save(name); }}>
         <h2>Rename network</h2>
         <p>Only changes how this network appears in Overlook.</p>
-        <input className="text" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
+        <input className="text" data-autofocus value={name} onChange={(e) => setName(e.target.value)} />
       </form>
       <div className="dialog-actions">
         {network.customName && <button className="btn ghost" style={{ marginRight: "auto" }} onClick={() => save(null)}>Use original name</button>}
@@ -28,7 +32,7 @@ export function RenameDialog({ network, onClose }: { network: Network; onClose: 
   );
 }
 
-export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: { title: string; message: string; confirm: string; onConfirm: () => void; onClose: () => void }) {
+export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: Readonly<{ title: string; message: string; confirm: string; onConfirm: () => void; onClose: () => void }>) {
   return (
     <Dialog onClose={onClose}>
       <div className="dialog-body">
@@ -36,14 +40,54 @@ export function ConfirmDialog({ title, message, confirm, onConfirm, onClose }: {
         <p>{message}</p>
       </div>
       <div className="dialog-actions">
-        <button className="btn" autoFocus onClick={onClose}>Cancel</button>
+        <button className="btn" data-autofocus onClick={onClose}>Cancel</button>
         <button className="btn danger" onClick={() => { onConfirm(); onClose(); }}>{confirm}</button>
       </div>
     </Dialog>
   );
 }
 
-export function Onboarding({ status, onDone }: { status: Status; onDone: () => void }) {
+export function PerAppDialog({ status, onClose }: Readonly<{ status: Status; onClose: () => void }>) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const helper = status.platform === "windows" ? "admin rights" : "root";
+  const turnOn = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.setPerApp(true);
+      onClose();
+    } catch (e) {
+      setError(errorText(e));
+      setBusy(false);
+    }
+  };
+  const row = (label: string, text: string) => (
+    <div style={{ display: "flex", gap: 10, marginBottom: 10 }}>
+      <b style={{ width: 62, flex: "none" }}>{label}</b>
+      <span className="muted">{text}</span>
+    </div>
+  );
+  return (
+    <Dialog onClose={onClose}>
+      <div className="dialog-body">
+        <h2>Turn on per-app tracking? {status.live.perApp.experimental && <span className="pill muted">Experimental</span>}</h2>
+        {row("Pro", "See which apps use data on each network.")}
+        {status.platform !== "macos" && row("Con", `Needs ${helper} to install a small background helper.`)}
+        {status.platform !== "macos" && row("Con", "A helper process runs alongside Overlook.")}
+        {row("Con", "Only tracks from now on. Earlier history stays per-network only.")}
+        {row("Privacy", "App names and byte counts only, never contents or destinations. Stored only on this computer.")}
+        {error && <span className="pill warn">{error}</span>}
+      </div>
+      <div className="dialog-actions">
+        <button className="btn" data-autofocus onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={busy} onClick={turnOn}>Turn on</button>
+      </div>
+    </Dialog>
+  );
+}
+
+export function Onboarding({ status, onDone }: Readonly<{ status: Status; onDone: () => void }>) {
   const point = (icon: IconName, title: string, text: string) => (
     <div style={{ display: "flex", gap: 12, marginBottom: 14 }}>
       <Icon name={icon} size={16} style={{ color: "var(--download)", marginTop: 1, flex: "none" }} />
@@ -69,7 +113,7 @@ export function Onboarding({ status, onDone }: { status: Status; onDone: () => v
       </div>
       <div className="dialog-actions">
         {gated && <button className="btn" style={{ marginRight: "auto" }} onClick={() => api.requestWifiNames()}>Allow Wi-Fi names</button>}
-        <button className="btn primary" autoFocus onClick={onDone}>Get started</button>
+        <button className="btn primary" data-autofocus onClick={onDone}>Get started</button>
       </div>
     </Dialog>
   );
@@ -77,18 +121,19 @@ export function Onboarding({ status, onDone }: { status: Status; onDone: () => v
 
 const TABS: { id: string; label: string; icon: IconName }[] = [
   { id: "general", label: "General", icon: "settings" },
+  { id: "caps", label: "Caps & alerts", icon: "alert" },
   { id: "appearance", label: "Appearance", icon: "paint" },
   { id: "data", label: "Data", icon: "database" },
   { id: "accuracy", label: "Accuracy", icon: "info" },
 ];
 
-export function Settings({ status, initialTab, appearance, onAppearance, onClose }: {
+export function Settings({ status, initialTab, appearance, onAppearance, onClose }: Readonly<{
   status: Status;
   initialTab?: string;
   appearance: Appearance;
   onAppearance: (a: Appearance) => void;
   onClose: () => void;
-}) {
+}>) {
   const [tab, setTab] = useState(initialTab ?? "general");
   return (
     <Dialog onClose={onClose} wide>
@@ -104,6 +149,7 @@ export function Settings({ status, initialTab, appearance, onAppearance, onClose
         </nav>
         <div className="settings-pane">
           {tab === "general" && <General status={status} />}
+          {tab === "caps" && <CapsPane status={status} />}
           {tab === "appearance" && <AppearancePane value={appearance} onChange={onAppearance} />}
           {tab === "data" && <DataPane status={status} />}
           {tab === "accuracy" && <Accuracy status={status} />}
@@ -113,19 +159,7 @@ export function Settings({ status, initialTab, appearance, onAppearance, onClose
   );
 }
 
-function Setting({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
-  return (
-    <div className="setting">
-      <div>
-        <div>{title}</div>
-        {desc && <div className="desc">{desc}</div>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function General({ status }: { status: Status }) {
+function General({ status }: Readonly<{ status: Status }>) {
   const [login, setLogin] = useState<boolean | null>(null);
   useEffect(() => {
     isEnabled().then(setLogin).catch(() => setLogin(false));
@@ -152,7 +186,7 @@ function General({ status }: { status: Status }) {
   );
 }
 
-function AppearancePane({ value, onChange }: { value: Appearance; onChange: (a: Appearance) => void }) {
+function AppearancePane({ value, onChange }: Readonly<{ value: Appearance; onChange: (a: Appearance) => void }>) {
   return (
     <>
       <h3>Appearance</h3>
@@ -176,7 +210,7 @@ function AppearancePane({ value, onChange }: { value: Appearance; onChange: (a: 
   );
 }
 
-function MiniPreview({ dark }: { dark: boolean }) {
+function MiniPreview({ dark }: Readonly<{ dark: boolean }>) {
   const c = dark
     ? { bg: "#0b0b0c", card: "#111112", line: "rgba(255,255,255,0.08)", ink: "#ededef", down: "#a29ef6", up: "#6366f1" }
     : { bg: "#fafafa", card: "#ffffff", line: "rgba(0,0,0,0.08)", ink: "#0a0a0b", down: "#9b98f3", up: "#4f46e5" };
@@ -199,8 +233,20 @@ function MiniPreview({ dark }: { dark: boolean }) {
   );
 }
 
-function DataPane({ status }: { status: Status }) {
+function DataPane({ status }: Readonly<{ status: Status }>) {
   const [confirm, setConfirm] = useState(false);
+  const [perApp, setPerApp] = useState(false);
+  const [askDelete, setAskDelete] = useState(false);
+  const [offError, setOffError] = useState<string | null>(null);
+  const turnOff = async () => {
+    setOffError(null);
+    try {
+      await api.setPerApp(false);
+      setAskDelete(true);
+    } catch (e) {
+      setOffError(errorText(e));
+    }
+  };
   const dropped = useLive(() => api.droppedBytes(Date.now() / 1000 - 365 * 86400), []) ?? 0;
   const first = status.firstCoveredHour;
   return (
@@ -218,9 +264,21 @@ function DataPane({ status }: { status: Status }) {
           <span className="num">{bytes(dropped)}</span>
         </Setting>
       )}
+      <Setting title="Per-app tracking" desc={`See which apps use data on each network.${status.platform !== "macos" ? " Runs a small helper process." : ""}`}>
+        <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          {status.live.perApp.experimental && <span className="pill muted">Experimental</span>}
+          {offError && <span className="pill warn">{offError}</span>}
+          <Toggle label="Per-app tracking" checked={status.live.perApp.enabled} onChange={(v) => (v ? setPerApp(true) : turnOff())} />
+        </span>
+      </Setting>
       <Setting title="Delete all usage data" desc="Everything stays on this computer. Overlook makes no network requests of its own.">
         <button className="btn danger" onClick={() => setConfirm(true)}><Icon name="trash" size={13} />Delete…</button>
       </Setting>
+      {perApp && <PerAppDialog status={status} onClose={() => setPerApp(false)} />}
+      {askDelete && (
+        <ConfirmDialog title="Delete per-app history?" message="Per-app tracking is off. Delete the recorded per-app usage too, or keep it?" confirm="Delete history"
+          onConfirm={() => api.deleteAppData()} onClose={() => setAskDelete(false)} />
+      )}
       {confirm && (
         <ConfirmDialog title="Delete all usage data?" message="All networks and their history are permanently removed." confirm="Delete all data"
           onConfirm={() => api.deleteAll()} onClose={() => setConfirm(false)} />
@@ -229,7 +287,7 @@ function DataPane({ status }: { status: Status }) {
   );
 }
 
-export function Accuracy({ status }: { status: Status }) {
+export function Accuracy({ status }: Readonly<{ status: Status }>) {
   const counters = { macos: "the kernel's 64-bit interface counters (sysctl)", windows: "the 64-bit adapter counters from IP Helper (GetIfEntry2)", linux: "the kernel's interface statistics in /sys/class/net" }[status.platform] ?? "the OS interface counters";
   return (
     <div className="prose" style={{ overflowY: "auto", maxHeight: 420 }}>
@@ -243,7 +301,7 @@ export function Accuracy({ status }: { status: Status }) {
       <h4>Not tracked</h4>
       <p>Overlook can't see traffic while it isn't running, and counters restart on reboot, so traffic between startup and Overlook launching is lost. Untracked periods show as gaps, never as zero.</p>
       <h4>Known limits</h4>
-      <p>Counters include local-network traffic (casting, file sharing, backups to a NAS), which may not count against a data cap. VPN traffic is counted once, on the adapter that carries it. Virtual adapters (VPN, Hyper-V, Docker, WSL) are excluded. There's no per-app breakdown.</p>
+      <p>Counters include local-network traffic (casting, file sharing, backups to a NAS), which may not count against a data cap. VPN traffic is counted once, on the adapter that carries it. Virtual adapters (VPN, Hyper-V, Docker, WSL) are excluded. Per-app figures are opt-in and only cover the time since you turned them on; see the README for platform limits.</p>
       <h4>Privacy</h4>
       <p>All data stays in a local SQLite database. Overlook doesn't transmit anything and never reads your location; the Location permission only unlocks Wi-Fi names.</p>
     </div>
