@@ -37,15 +37,12 @@ fn icacls(args: &[&str]) -> Result<(), String> {
     if out.status.success() { Ok(()) } else { Err(format!("icacls {args:?}: {}", String::from_utf8_lossy(&out.stdout).trim())) }
 }
 
-/// SYSTEM owns the directory; only SYSTEM (full) and the owner (read) have access, inherited by the snapshot.
-/// ProgramData is user-writable, so a directory a user pre-created (owner not SYSTEM/Administrators) is refused;
-/// nothing here recurses, so planted junctions inside are never followed.
+/// SYSTEM owns the directory; only SYSTEM/Administrators (full) and the owner (read) have access, inherited by the snapshot.
+/// It is created with a protected DACL so no user can touch it before lockdown. ProgramData is user-writable, so a
+/// pre-existing directory not owned by SYSTEM/Administrators (or a junction) is refused. Nothing here recurses.
 pub fn secure_dir(dir: &Path, owner: &Owner) -> Result<(), String> {
     let err = |e: std::io::Error| format!("{}: {e}", dir.display());
-    match std::fs::create_dir(dir) {
-        Err(e) if e.kind() != std::io::ErrorKind::AlreadyExists => return Err(err(e)),
-        _ => {}
-    }
+    create_protected_dir(dir).map_err(err)?;
     let meta = std::fs::symlink_metadata(dir).map_err(err)?;
     if meta.file_type().is_symlink() || !meta.is_dir() {
         return Err(format!("{} is not a plain directory", dir.display()));
@@ -54,8 +51,31 @@ pub fn secure_dir(dir: &Path, owner: &Owner) -> Result<(), String> {
         return Err(format!("{} exists and is not owned by SYSTEM or Administrators; remove it and restart the service", dir.display()));
     }
     let d = dir.to_str().ok_or("non-UTF-8 snapshot dir")?;
-    icacls(&[d, "/setowner", SYSTEM_SID])?;
+    // Adds the owner's read grant. The SYSTEM grant and /inheritance:r change nothing on a directory we created;
+    // they lock down an admin-made one that still inherits, without SYSTEM losing access.
     icacls(&[d, "/inheritance:r", "/grant:r", &format!("{SYSTEM_SID}:(OI)(CI)F"), &format!("{}:(OI)(CI)R", owner.0)])
+}
+
+/// CreateDirectoryW with `O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`; an existing directory is left alone.
+fn create_protected_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Foundation::{LocalFree, ERROR_ALREADY_EXISTS};
+    use windows_sys::Win32::Security::Authorization::{ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1};
+    use windows_sys::Win32::Security::SECURITY_ATTRIBUTES;
+    use windows_sys::Win32::Storage::FileSystem::CreateDirectoryW;
+    let sddl: Vec<u16> = "O:SYG:SYD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)".encode_utf16().chain([0]).collect();
+    let path: Vec<u16> = dir.as_os_str().encode_wide().chain([0]).collect();
+    let mut sd = std::ptr::null_mut();
+    unsafe {
+        if ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), SDDL_REVISION_1, &mut sd, std::ptr::null_mut()) == 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let sa = SECURITY_ATTRIBUTES { nLength: size_of::<SECURITY_ATTRIBUTES>() as u32, lpSecurityDescriptor: sd, bInheritHandle: 0 };
+        let ok = CreateDirectoryW(path.as_ptr(), &sa) != 0;
+        let e = std::io::Error::last_os_error();
+        LocalFree(sd);
+        if ok || e.raw_os_error() == Some(ERROR_ALREADY_EXISTS as i32) { Ok(()) } else { Err(e) }
+    }
 }
 
 fn owned_by_admin(dir: &Path) -> Result<bool, String> {
