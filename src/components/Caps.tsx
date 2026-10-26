@@ -233,7 +233,7 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
     setAmount(String(Math.ceil(bytesValue / u / (u === 1e6 ? 100 : 1)) * (u === 1e6 ? 100 : 1)));
   };
   const weekday = (d: number) => fmtDate(new Date(2026, 0, 4 + d), { weekday: "long" });
-  const network = draft.networkId === null ? "all networks" : displayName(status.networks.find((n) => n.id === draft.networkId)!);
+  const network = draft.networkId === null ? "all networks" : networkScope(draft, status.networks);
   const scope = draft.appId === null ? network : `${appName} on ${network}`;
   const appOnly = draft.appId === null ? undefined : "Apps can only alert";
   const choices: { id: Cap["action"]; icon: IconName; title: string; desc: string; disabled?: string }[] = [

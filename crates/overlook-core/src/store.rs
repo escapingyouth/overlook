@@ -108,8 +108,10 @@ impl Store {
                  id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
                  limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL, app_id INTEGER);",
         )?;
-        // Databases from before per-app caps; fails harmlessly once the column exists.
-        db.execute("ALTER TABLE caps ADD COLUMN app_id INTEGER", []).ok();
+        // Databases from before per-app caps.
+        if db.prepare("SELECT app_id FROM caps LIMIT 0").is_err() {
+            db.execute("ALTER TABLE caps ADD COLUMN app_id INTEGER", [])?;
+        }
         Ok(Store { db })
     }
 
@@ -172,6 +174,7 @@ impl Store {
             s.db.execute("DELETE FROM app_usage WHERE network_id = ?", [id]).ok();
             s.db.execute("DELETE FROM networks WHERE id = ?", [id]).ok();
             s.db.execute("DELETE FROM caps WHERE network_id = ?", [id]).ok();
+            s.forget_deleted_cap_alerts();
             s.db.execute("UPDATE baselines SET network_id = NULL WHERE network_id = ?", [id]).ok();
         });
     }
@@ -295,6 +298,7 @@ impl Store {
     pub fn delete_app_data(&mut self) {
         self.transaction(|s| {
             s.db.execute("DELETE FROM caps WHERE app_id IS NOT NULL", []).ok();
+            s.forget_deleted_cap_alerts();
             for table in ["app_usage", "app_coverage", "apps"] {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
@@ -391,6 +395,13 @@ impl Store {
         self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{id}:%")]).ok();
     }
 
+    /// SQLite reuses a deleted cap's id, so its sent-alert keys would silence the next cap's alerts.
+    fn forget_deleted_cap_alerts(&self) {
+        self.db
+            .execute("DELETE FROM meta WHERE key LIKE 'sent:cap:%' AND NOT EXISTS (SELECT 1 FROM caps WHERE meta.key LIKE 'sent:cap:' || caps.id || ':%')", [])
+            .ok();
+    }
+
     pub fn prune(&mut self, before: f64) {
         let hour = hour_of(before);
         self.transaction(|s| {
@@ -408,6 +419,7 @@ impl Store {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
             s.db.execute("DELETE FROM caps WHERE network_id IS NOT NULL OR app_id IS NOT NULL", []).ok();
+            s.forget_deleted_cap_alerts();
         });
         self.db.execute_batch("VACUUM").ok();
     }

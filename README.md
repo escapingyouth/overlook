@@ -11,9 +11,9 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (46 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (48 tests)
 cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
-cargo test --workspace                   # everything, including the shell (58 tests)
+cargo test --workspace                   # everything, including the shell (60 tests)
 npm test                              # ranges, buckets, statistics, per-app (21 tests)
 ```
 

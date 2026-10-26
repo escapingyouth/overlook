@@ -330,10 +330,8 @@ pub fn run() {
                     }
                     // Menu-bar text (macOS) / indicator label (Linux); Windows trays have no title.
                     let title = if state.tray_rate.load(Ordering::Relaxed) { rate.map(|(rx, tx)| format!("↓{} ↑{}", short_rate(rx), short_rate(tx))) } else { None };
-                    if title != shown {
-                        if let Some(tray) = handle.tray_by_id("overlook") {
-                            tray.set_title(title.as_deref()).ok();
-                        }
+                    // Only remember what actually reached the tray, so a failed update retries next second.
+                    if title != shown && handle.tray_by_id("overlook").is_some_and(|t| t.set_title(title.as_deref()).is_ok()) {
                         shown = title;
                     }
                 }

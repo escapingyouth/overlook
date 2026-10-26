@@ -230,6 +230,38 @@ mod tests {
         assert!(v.block.is_empty() && v.throttle.is_empty());
     }
 
+    #[test] fn old_databases_gain_app_caps() {
+        let path = std::env::temp_dir().join(format!("overlook-migrate-{}.sqlite", std::process::id()));
+        rusqlite::Connection::open(&path).unwrap().execute_batch(
+            "CREATE TABLE caps (id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
+             limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL);
+             INSERT INTO caps VALUES (1, NULL, 'day', 0, 100, '80', 'none', 1000);").unwrap();
+        let caps = Store::open(&path.to_string_lossy()).unwrap().caps();
+        Store::open(&path.to_string_lossy()).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!((caps.len(), caps[0].app_id), (1, None));
+    }
+
+    #[test] fn a_reused_cap_id_alerts_again() {
+        let mut s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, now).unwrap();
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
+        s.add_app_usage(id, app, now, 900, 0);
+        let cap = Cap { id: 0, network_id: None, period: "day".into(), reset: 0, limit_bytes: 1000, alerts: vec![80], action: "none".into(), throttle_kbps: 1000, app_id: Some(app) };
+        s.save_cap(&cap);
+        assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
+
+        s.delete_app_data();
+        let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
+        s.add_app_usage(id, app, now, 900, 0);
+        s.save_cap(&Cap { app_id: Some(app), ..cap });
+        assert_eq!(s.caps()[0].id, 1, "SQLite reuses the deleted id");
+        assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
+    }
+
     #[test] fn unusual_upload_alerts_once_per_hour() {
         let s = Store::open(":memory:").unwrap();
         let now = crate::now();
