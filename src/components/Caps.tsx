@@ -148,11 +148,13 @@ export function CapCompact({ cap, networks }: Readonly<{ cap: CapUsage; networks
   );
 }
 
-export function CapsPane({ status }: Readonly<{ status: Status }>) {
+const newCap = (networkId: number | null): Cap => ({ id: 0, networkId, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null });
+
+export function CapsPane({ status, newCapFor }: Readonly<{ status: Status; newCapFor?: number }>) {
   const caps = useCaps() ?? [];
-  const [editing, setEditing] = useState<Cap | null>(null);
+  const [editing, setEditing] = useState<Cap | null>(() => (newCapFor === undefined ? null : newCap(newCapFor)));
   if (editing) return <CapForm status={status} cap={editing} onDone={() => setEditing(null)} />;
-  const add = () => setEditing({ id: 0, networkId: status.live.primary, period: "month", reset: 1, limitBytes: 50e9, alerts: [80, 100], action: "none", throttleKbps: 1000, appId: null });
+  const add = () => setEditing(newCap(status.live.primary));
   return (
     <>
       <h3>Caps & alerts</h3>

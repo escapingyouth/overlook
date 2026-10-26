@@ -19,7 +19,7 @@ export interface Network {
 export interface Status {
   networks: Network[];
   live: {
-    active: { networkId: number; interface: string; kind: string }[];
+    active: { networkId: number; interface: string; kind: string; hotspot: boolean }[];
     primary: number | null;
     rate: [number, number] | null;
     lastSample: number;

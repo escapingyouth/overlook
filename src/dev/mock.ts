@@ -102,7 +102,8 @@ mockIPC((cmd, args: any) => {
     case "status":
       return {
         networks: params.has("empty") ? [] : networks,
-        live: { active: [{ networkId: 1, interface: "en0", kind: "wifi" }], primary: 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
+        live: { active: [params.has("hotspot") ? { networkId: 3, interface: "en0", kind: "wifi", hotspot: true } : { networkId: 1, interface: "en0", kind: "wifi", hotspot: false }],
+          primary: params.has("hotspot") ? 3 : 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
           perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: platform !== "macos" } },
         firstCoveredHour: nowHour - 400 * 24,
         wifiNameAccess: params.get("access") ?? "granted",

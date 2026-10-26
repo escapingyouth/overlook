@@ -3,6 +3,7 @@ import {
   Alert02Icon,
   ArrowLeft01Icon,
   Cancel01Icon,
+  SmartPhone01Icon,
   BinocularsIcon,
   DashboardSpeed01Icon,
   Notification03Icon,
@@ -81,6 +82,7 @@ const icons = {
   app: CubeIcon,
   computer: ComputerIcon,
   close: Cancel01Icon,
+  phone: SmartPhone01Icon,
 } as const;
 
 export type IconName = keyof typeof icons;

@@ -32,7 +32,7 @@ export default function Tray() {
           <div style={{ fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{network ? displayName(network) : "Not connected"}</div>
           <div className="muted" style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 6 }}>
             <span className={`dot ${network ? "" : "off"}`} />
-            {active ? `${active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : "No usage is being recorded"}
+            {active ? `${active.hotspot ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : "No usage is being recorded"}
           </div>
         </div>
       </div>

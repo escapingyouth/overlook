@@ -418,3 +418,11 @@ body.tray-body { background: transparent; }
 .chart.pickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
 .chart .pick-band { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: color-mix(in srgb, var(--accent) 40%, transparent); }
 .panel.picked { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+
+/* Hotspot nudge */
+.callout {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 14px 18px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.callout .icon-tile { color: var(--accent); }
+.callout-title { font-weight: 600; margin-bottom: 2px; }

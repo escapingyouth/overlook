@@ -9,7 +9,7 @@ import { Onboarding, RenameDialog, ConfirmDialog, PerAppDialog, Settings } from 
 import { ExportButton, RangeMenu } from "./components/Toolbar";
 
 type Overlay =
-  | { kind: "settings"; tab?: string }
+  | { kind: "settings"; tab?: string; newCapFor?: number }
   | { kind: "rename"; network: Network }
   | { kind: "delete"; network: Network }
   | { kind: "perApp" }
@@ -73,13 +73,14 @@ export default function App() {
               onSelect={setSelection} onRename={(n) => setOverlay({ kind: "rename", network: n })}
               onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })}
               onCaps={() => setOverlay({ kind: "settings", tab: "caps" })}
+              onNewCap={(id) => setOverlay({ kind: "settings", tab: "caps", newCapFor: id })}
               onEnablePerApp={() => setOverlay({ kind: "perApp" })} />
           )}
         </div>
       </main>
 
       {overlay?.kind === "settings" && (
-        <Settings status={status} initialTab={overlay.tab} appearance={appearance} onAppearance={setAppearance} onClose={() => setOverlay(null)} />
+        <Settings status={status} initialTab={overlay.tab} newCapFor={overlay.newCapFor} appearance={appearance} onAppearance={setAppearance} onClose={() => setOverlay(null)} />
       )}
       {overlay?.kind === "perApp" && <PerAppDialog status={status} onClose={() => setOverlay(null)} />}
       {overlay?.kind === "rename" && <RenameDialog network={overlay.network} onClose={() => setOverlay(null)} />}

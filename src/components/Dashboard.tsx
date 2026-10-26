@@ -1,6 +1,6 @@
 import { createContext, useContext, useState } from "react";
 import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useLive, useRate, useReport } from "../lib/api";
+import { api, displayName, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
@@ -12,7 +12,7 @@ import { PickedSpan, TopApps } from "./TopApps";
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onEnablePerApp }: Readonly<{
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onNewCap, onEnablePerApp }: Readonly<{
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -21,6 +21,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onRename: (n: Network) => void;
   onAccuracy: () => void;
   onCaps: () => void;
+  onNewCap: (networkId: number) => void;
   onEnablePerApp: () => void;
 }>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
@@ -52,6 +53,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
 
+      <HotspotCallout status={status} network={network} onNewCap={onNewCap} />
       <CapsCard status={status} network={network} onManage={onCaps} />
 
       <div className="main-grid">
@@ -112,6 +114,31 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   );
 }
 
+/** Phone plans run out fast: offer a cap when the network in view is a hotspot nothing caps yet. */
+function HotspotCallout({ status, network, onNewCap }: Readonly<{ status: Status; network: Network | null; onNewCap: (id: number) => void }>) {
+  const caps = useCaps();
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const id = network?.id ?? status.live.primary;
+  const active = status.live.active.find((a) => a.networkId === id);
+  const n = status.networks.find((x) => x.id === id);
+  const key = `overlook.hotspotDismissed.${id}`;
+  if (!active?.hotspot || !n || !caps || caps.some((c) => c.networkId === id && c.appId === null) || dismissed === key || localStorage.getItem(key)) return null;
+  return (
+    <section className="callout" aria-label="Phone hotspot">
+      <span className="icon-tile lg"><Icon name="phone" size={18} /></span>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="callout-title">{network ? "This looks like a phone hotspot" : `You're on a phone hotspot · ${displayName(n)}`}</div>
+        <div className="muted" style={{ fontSize: 12.5 }}>Mobile data runs out fast. Set a cap to get alerts, or a hard stop, before the plan does.</div>
+      </div>
+      <button className="btn ghost" onClick={() => {
+        localStorage.setItem(key, "1");
+        setDismissed(key);
+      }}>Not a hotspot</button>
+      <button className="btn primary" onClick={() => onNewCap(n.id)}>Set a cap</button>
+    </section>
+  );
+}
+
 function weekOrder() {
   const first = weekStart();
   return Array.from({ length: 7 }, (_, i) => (first + i) % 7);
@@ -136,7 +163,7 @@ function PageHead({ status, network }: Readonly<{ status: Status; network: Netwo
         <div className="muted" style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
           <span className={`dot ${live ? "" : "off"}`} />
           {network
-            ? active ? `Connected · ${active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
+            ? active ? `Connected · ${active.hotspot ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
             : current ? `${status.networks.length} networks · on ${displayName(current)}` : `${status.networks.length} networks · offline`}
         </div>
       </div>
