@@ -27,9 +27,11 @@ Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?plat
 ## Branches & releases
 - `main` is what ships. Releases are only ever built from it.
 - `dev` collects finished work before it goes to `main`.
-- Work happens on a branch off `dev` (for example `feat/top-apps`), merged back with a pull request.
+- `dev` is the default branch. Work happens on a branch off `dev` (for example `feat/top-apps`), merged back with a pull request.
 
-Both `main` and `dev` are protected by repository rulesets: changes land only through pull requests, and force pushes and branch deletion are blocked. No one is exempt, admins included.
+Both `main` and `dev` are protected by repository rulesets: changes land only through pull requests that pass CI, and force pushes and branch deletion are blocked. No one is exempt, admins included.
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every pull request to, and push to, `main` and `dev`. On macOS, Windows and Linux (Ubuntu 22.04) it builds the helper and UI, then runs `npm test` and `cargo test --workspace`. All three jobs are required checks.
 
 To release:
 1. Bump the version in a pull request to `dev`. `src-tauri/tauri.conf.json` sets the release version; keep `package.json` and `src-tauri/Cargo.toml` in step.
