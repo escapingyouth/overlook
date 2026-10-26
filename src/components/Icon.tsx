@@ -1,0 +1,76 @@
+import { HugeiconsIcon } from "@hugeicons/react";
+import {
+  Alert02Icon,
+  BinocularsIcon,
+  ArrowDataTransferVerticalIcon,
+  ArrowDown01Icon,
+  Calendar03Icon,
+  ChartAverageIcon,
+  CheckmarkCircle02Icon,
+  Clock01Icon,
+  CloudDownloadIcon,
+  CloudUploadIcon,
+  Download04Icon,
+  Tick02Icon,
+  ArrowDown02Icon,
+  ArrowUp02Icon,
+  ChartColumnIcon,
+  DashboardSquare01Icon,
+  Database01Icon,
+  Delete02Icon,
+  Edit02Icon,
+  EqualSignIcon,
+  EthernetPortIcon,
+  Folder01Icon,
+  InformationCircleIcon,
+  Location01Icon,
+  PaintBoardIcon,
+  PowerIcon,
+  Settings01Icon,
+  SquareLock02Icon,
+  TradeDownIcon,
+  TradeUpIcon,
+  Wifi01Icon,
+} from "@hugeicons/core-free-icons";
+
+const icons = {
+  wifi: Wifi01Icon,
+  ethernet: EthernetPortIcon,
+  grid: DashboardSquare01Icon,
+  settings: Settings01Icon,
+  paint: PaintBoardIcon,
+  database: Database01Icon,
+  down: ArrowDown02Icon,
+  up: ArrowUp02Icon,
+  arrows: ArrowDataTransferVerticalIcon,
+  info: InformationCircleIcon,
+  location: Location01Icon,
+  trendUp: TradeUpIcon,
+  trendDown: TradeDownIcon,
+  equal: EqualSignIcon,
+  edit: Edit02Icon,
+  trash: Delete02Icon,
+  folder: Folder01Icon,
+  power: PowerIcon,
+  lock: SquareLock02Icon,
+  chart: ChartColumnIcon,
+  calendar: Calendar03Icon,
+  chevron: ArrowDown01Icon,
+  export: Download04Icon,
+  check: Tick02Icon,
+  average: ChartAverageIcon,
+  cloudDown: CloudDownloadIcon,
+  cloudUp: CloudUploadIcon,
+  alert: Alert02Icon,
+  ok: CheckmarkCircle02Icon,
+  clock: Clock01Icon,
+  binoculars: BinocularsIcon,
+} as const;
+
+export type IconName = keyof typeof icons;
+
+export function Icon({ name, size = 16, className, style }: { name: IconName; size?: number; className?: string; style?: React.CSSProperties }) {
+  return <HugeiconsIcon icon={icons[name]} size={size} strokeWidth={1.6} color="currentColor" className={`icon ${className ?? ""}`} style={style} aria-hidden />;
+}
+
+export const kindIcon = (kind?: string): IconName => (kind === "wifi" ? "wifi" : kind === "ethernet" ? "ethernet" : "grid");
