@@ -1,6 +1,6 @@
-# Tally: per-network data usage for macOS, Windows and Linux
+# Overlook: per-network data usage for macOS, Windows and Linux
 
-Tally records how much data you use on each network. It keeps a separate history for each network and shows interactive charts for ranges from 24 hours to 1 year. It runs from the menu bar / system tray, and everything stays on your computer.
+Overlook records how much data you use on each network. It keeps a separate history for each network and shows interactive charts for ranges from 24 hours to 1 year. It runs from the menu bar / system tray, and everything stays on your computer.
 
 ![Overview](docs/overview-dark.png)
 
@@ -11,21 +11,21 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p tally-core              # collector, attribution, storage (24 tests)
+cargo test -p overlook-core              # collector, attribution, storage (24 tests)
 npm test                              # ranges, buckets, statistics (12 tests)
 ```
 
 Build each OS's installer on that OS (or in CI with a matrix). The core crate type-checks for all three targets from any host:
-`cargo check -p tally-core --no-default-features --target x86_64-pc-windows-msvc`.
+`cargo check -p overlook-core --no-default-features --target x86_64-pc-windows-msvc`.
 
 Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?platform=windows&access=denied` (or `#tray`). In that mode a dev-only mock (`src/dev/mock.ts`) supplies synthetic history; it is never included in a build.
 
 ## Architecture
 ```
-crates/tally-core   Rust, no UI. Unit-tested.
+crates/overlook-core   Rust, no UI. Unit-tested.
   system.rs         per-OS counters, boot time, physical-adapter filter, router MAC, Wi-Fi names, permission
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
-  store.rs          SQLite (hourly buckets; same schema as Tally 1)
+  store.rs          SQLite (hourly buckets; same schema as earlier versions)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
 src                 React UI, custom components (no UI or chart library; Hugeicons for icons)
@@ -45,13 +45,13 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 
 - **Identity.** A network's key is `wifi:<SSID>` or `router:<MAC>`, never the adapter name alone. If a network later gains or loses its SSID, it keeps one history, matched by router MAC.
 - **Sampling.** The collector checks network identity every 5 s and records a sample every 30 s, or immediately when the identity changes. That keeps any ambiguity around a network switch to a few seconds.
-- **Resets.** After a reboot, or when counters go backwards, Tally takes a new baseline and counts nothing for that interval.
-- **Estimates.** Traffic during a network switch is counted but marked as estimated. So is traffic across a gap (sleep, or Tally not running) when the network was the same at both ends. If the network changed during a gap, the bytes are recorded as *unattributed* and aren't counted toward any network.
+- **Resets.** After a reboot, or when counters go backwards, Overlook takes a new baseline and counts nothing for that interval.
+- **Estimates.** Traffic during a network switch is counted but marked as estimated. So is traffic across a gap (sleep, or Overlook not running) when the network was the same at both ends. If the network changed during a gap, the bytes are recorded as *unattributed* and aren't counted toward any network.
 - **Gaps.** A coverage table records when collection was running. Untracked periods render as no bar and no track, never as zero.
 - **VPNs.** Tunnel and virtual adapters are excluded, so VPN traffic is counted once, on the physical adapter that carries it.
 
 ### Limitations
-- Tally only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
+- Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
 - There's no per-app breakdown.
 - Two different networks with the same SSID share one history.

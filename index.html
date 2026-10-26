@@ -3,9 +3,9 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tally</title>
+    <title>Overlook</title>
     <script>
-      const pref = localStorage.getItem("tally.appearance") || "system";
+      const pref = localStorage.getItem("overlook.appearance") || "system";
       document.documentElement.dataset.theme = pref === "dark" || (pref === "system" && matchMedia("(prefers-color-scheme: dark)").matches) ? "dark" : "light";
     </script>
   </head>

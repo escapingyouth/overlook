@@ -2611,6 +2611,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "overlook"
+version = "2.0.0"
+dependencies = [
+ "overlook-core",
+ "serde",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-opener",
+ "tauri-plugin-positioner",
+ "tauri-plugin-single-instance",
+]
+
+[[package]]
+name = "overlook-core"
+version = "1.0.0"
+dependencies = [
+ "core-foundation",
+ "libc",
+ "netdev",
+ "objc2",
+ "objc2-core-location",
+ "objc2-core-wlan",
+ "objc2-foundation",
+ "rusqlite",
+ "serde",
+ "system-configuration",
+]
+
+[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3608,36 +3638,6 @@ dependencies = [
  "pkg-config",
  "toml 0.8.2",
  "version-compare",
-]
-
-[[package]]
-name = "tally"
-version = "2.0.0"
-dependencies = [
- "serde",
- "tally-core",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-opener",
- "tauri-plugin-positioner",
- "tauri-plugin-single-instance",
-]
-
-[[package]]
-name = "tally-core"
-version = "1.0.0"
-dependencies = [
- "core-foundation",
- "libc",
- "netdev",
- "objc2",
- "objc2-core-location",
- "objc2-core-wlan",
- "objc2-foundation",
- "rusqlite",
- "serde",
- "system-configuration",
 ]
 
 [[package]]

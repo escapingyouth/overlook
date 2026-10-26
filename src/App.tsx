@@ -17,10 +17,10 @@ type Overlay =
 export default function App() {
   const status = useStatus();
   const [appearance, setAppearance] = useAppearance();
-  const [range, setRangeState] = useState<RangeId>(() => (localStorage.getItem("tally.range") as RangeId) || "week");
+  const [range, setRangeState] = useState<RangeId>(() => (localStorage.getItem("overlook.range") as RangeId) || "week");
   const [selection, setSelection] = useState<number | null | undefined>(undefined);
   const [overlay, setOverlay] = useState<Overlay>(null);
-  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("tally.onboarded") === "1");
+  const [onboarded, setOnboarded] = useState(() => localStorage.getItem("overlook.onboarded") === "1");
   const mainRef = useRef<HTMLDivElement>(null);
   const [narrow, setNarrow] = useState(false);
 
@@ -34,7 +34,7 @@ export default function App() {
 
   if (!status) return null;
   const setRange = (r: RangeId) => {
-    localStorage.setItem("tally.range", r);
+    localStorage.setItem("overlook.range", r);
     setRangeState(r);
   };
   const selectedId = selection === undefined ? status.live.primary : selection;
@@ -62,8 +62,8 @@ export default function App() {
                 <h2>{status.live.active.length ? "Collecting first measurements" : "No network connection"}</h2>
                 <div>
                   {status.live.active.length
-                    ? `Tally samples traffic every ${status.sampleInterval} seconds. Your first numbers will appear shortly.`
-                    : "Tally records usage once you join a Wi-Fi or Ethernet network that routes to the internet."}
+                    ? `Overlook samples traffic every ${status.sampleInterval} seconds. Your first numbers will appear shortly.`
+                    : "Overlook records usage once you join a Wi-Fi or Ethernet network that routes to the internet."}
                 </div>
               </div>
             </div>
@@ -82,7 +82,7 @@ export default function App() {
       {overlay?.kind === "delete" && (
         <ConfirmDialog
           title={`Delete history for “${displayName(overlay.network)}”?`}
-          message="Recorded usage for this network is permanently removed. If you're still connected, Tally starts a new history."
+          message="Recorded usage for this network is permanently removed. If you're still connected, Overlook starts a new history."
           confirm="Delete history"
           onConfirm={() => {
             api.deleteNetwork(overlay.network.id);
@@ -92,7 +92,7 @@ export default function App() {
       )}
       {!onboarded && (
         <Onboarding status={status} onDone={() => {
-          localStorage.setItem("tally.onboarded", "1");
+          localStorage.setItem("overlook.onboarded", "1");
           setOnboarded(true);
         }} />
       )}
@@ -114,7 +114,7 @@ function Sidebar({ status, selected, onSelect, onSettings, onRename, onDelete }:
     <aside className="sidebar" data-tauri-drag-region onClick={() => setMenu(null)}>
       <div className="brand" data-tauri-drag-region>
         <span className="brand-mark"><Icon name="binoculars" size={14} /></span>
-        Tally
+        Overlook
       </div>
       <nav className="nav">
         <button className={`nav-item ${selected === null ? "active" : ""}`} onClick={() => onSelect(null)}>

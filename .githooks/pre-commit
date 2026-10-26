@@ -9,6 +9,6 @@ if printf '%s\n' "$staged" | grep -Eq '^(src/|index\.html|package\.json|tsconfig
 fi
 
 if printf '%s\n' "$staged" | grep -Eq '^(crates/|src-tauri/src/|Cargo\.(toml|lock)|src-tauri/Cargo\.toml)'; then
-  cargo test -p tally-core --quiet
-  cargo check -p tally --quiet
+  cargo test -p overlook-core --quiet
+  cargo check -p overlook --quiet
 fi

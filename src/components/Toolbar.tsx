@@ -65,7 +65,7 @@ export function ExportButton({ network, range }: { network: Network | null; rang
         lines.push([local, d.toISOString(), name, r.rx, r.tx, r.rx + r.tx, r.estimatedRx + r.estimatedTx].map(csvField).join(","));
       }
       const safe = name.replace(/[^\p{L}\p{N} ._-]/gu, "").trim() || "Network";
-      await api.saveExport(`Tally ${safe} ${rangeInfo(range).short} ${now.toISOString().slice(0, 10)}.csv`, lines.join("\n") + "\n");
+      await api.saveExport(`Overlook ${safe} ${rangeInfo(range).short} ${now.toISOString().slice(0, 10)}.csv`, lines.join("\n") + "\n");
     } catch (e) {
       alert(`Export failed: ${e}`);
     } finally {

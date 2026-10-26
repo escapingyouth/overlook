@@ -57,7 +57,7 @@ export function useLive<T>(load: () => Promise<T>, deps: unknown[]): T | undefin
     let alive = true;
     const refresh = () => run().then((v) => alive && setValue(v)).catch(console.error);
     refresh();
-    const unlisten = listen("tally://changed", refresh);
+    const unlisten = listen("overlook://changed", refresh);
     return () => {
       alive = false;
       unlisten.then((f) => f());

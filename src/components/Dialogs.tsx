@@ -16,7 +16,7 @@ export function RenameDialog({ network, onClose }: { network: Network; onClose: 
     <Dialog onClose={onClose}>
       <form className="dialog-body" onSubmit={(e) => { e.preventDefault(); save(name); }}>
         <h2>Rename network</h2>
-        <p>Only changes how this network appears in Tally.</p>
+        <p>Only changes how this network appears in Overlook.</p>
         <input className="text" autoFocus value={name} onChange={(e) => setName(e.target.value)} />
       </form>
       <div className="dialog-actions">
@@ -58,13 +58,13 @@ export function Onboarding({ status, onDone }: { status: Status; onDone: () => v
     <Dialog onClose={onDone}>
       <div className="dialog-body">
         <img src="/icon.png" width={44} height={44} alt="" style={{ marginBottom: 14 }} />
-        <h2 style={{ fontSize: 20 }}>Welcome to Tally</h2>
+        <h2 style={{ fontSize: 20 }}>Welcome to Overlook</h2>
         <p>See how much data you use on each network.</p>
         <div style={{ marginTop: 18 }}>
-          {point("chart", "Measured, not guessed", `Tally reads your computer's network byte counters every ${status.sampleInterval} seconds. Gaps show as gaps, and estimates are labelled.`)}
+          {point("chart", "Measured, not guessed", `Overlook reads your computer's network byte counters every ${status.sampleInterval} seconds. Gaps show as gaps, and estimates are labelled.`)}
           {point("wifi", "Separate history per network", "Home, office and hotspot usage is recorded separately, including across switches, sleep and restarts.")}
-          {point("lock", "Stays on this computer", "History is stored locally. Tally sends nothing anywhere.")}
-          {gated && point("location", "Wi-Fi names need Location access", "Your OS hides network names from apps without it. Tally never reads your location; without access, networks are told apart by their router.")}
+          {point("lock", "Stays on this computer", "History is stored locally. Overlook sends nothing anywhere.")}
+          {gated && point("location", "Wi-Fi names need Location access", "Your OS hides network names from apps without it. Overlook never reads your location; without access, networks are told apart by their router.")}
         </div>
       </div>
       <div className="dialog-actions">
@@ -134,13 +134,13 @@ function General({ status }: { status: Status }) {
   return (
     <>
       <h3>General</h3>
-      <Setting title="Open at login" desc="Tally only records usage while it's running. It stays in the menu bar / system tray when the window is closed.">
+      <Setting title="Open at login" desc="Overlook only records usage while it's running. It stays in the menu bar / system tray when the window is closed.">
         <Toggle label="Open at login" checked={!!login} onChange={async (v) => {
           await (v ? enable() : disable()).catch(console.error);
           setLogin(await isEnabled());
         }} />
       </Setting>
-      <Setting title="Wi-Fi network names" desc={status.platform === "linux" ? "Read with iw or NetworkManager." : "Your OS requires Location access to share Wi-Fi names. Tally never reads or stores your location."}>
+      <Setting title="Wi-Fi network names" desc={status.platform === "linux" ? "Read with iw or NetworkManager." : "Your OS requires Location access to share Wi-Fi names. Overlook never reads or stores your location."}>
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="muted" style={{ whiteSpace: "nowrap" }}>{access}</span>
           {(status.wifiNameAccess === "denied" || status.wifiNameAccess === "notDetermined") && (
@@ -218,7 +218,7 @@ function DataPane({ status }: { status: Status }) {
           <span className="num">{bytes(dropped)}</span>
         </Setting>
       )}
-      <Setting title="Delete all usage data" desc="Everything stays on this computer. Tally makes no network requests of its own.">
+      <Setting title="Delete all usage data" desc="Everything stays on this computer. Overlook makes no network requests of its own.">
         <button className="btn danger" onClick={() => setConfirm(true)}><Icon name="trash" size={13} />Delete…</button>
       </Setting>
       {confirm && (
@@ -233,19 +233,19 @@ export function Accuracy({ status }: { status: Status }) {
   const counters = { macos: "the kernel's 64-bit interface counters (sysctl)", windows: "the 64-bit adapter counters from IP Helper (GetIfEntry2)", linux: "the kernel's interface statistics in /sys/class/net" }[status.platform] ?? "the OS interface counters";
   return (
     <div className="prose" style={{ overflowY: "auto", maxHeight: 420 }}>
-      <h3 style={{ marginBottom: 14 }}>How Tally measures</h3>
+      <h3 style={{ marginBottom: 14 }}>How Overlook measures</h3>
       <h4>What's counted</h4>
-      <p>Every {status.sampleInterval} seconds, and within seconds of a network change, Tally reads {counters} for each physical Wi-Fi and Ethernet adapter and records the difference. The counters are exact for what crosses the adapter.</p>
+      <p>Every {status.sampleInterval} seconds, and within seconds of a network change, Overlook reads {counters} for each physical Wi-Fi and Ethernet adapter and records the difference. The counters are exact for what crosses the adapter.</p>
       <h4>Which network</h4>
       <p>Usage goes to the network the adapter was on: Wi-Fi by name (SSID), or by the router's hardware address when the name isn't available. Two networks with the same name are treated as one. Adapter names like en0 or "Wi-Fi" are never used alone, because they don't say which network you're on.</p>
       <h4>Estimates</h4>
-      <p>Values are marked estimated when the bytes are real but their attribution is inferred: traffic around a network switch, or during sleep or while Tally wasn't running, when the network was the same before and after. If the network changed during a gap, those bytes aren't counted and appear as unattributed in Data.</p>
+      <p>Values are marked estimated when the bytes are real but their attribution is inferred: traffic around a network switch, or during sleep or while Overlook wasn't running, when the network was the same before and after. If the network changed during a gap, those bytes aren't counted and appear as unattributed in Data.</p>
       <h4>Not tracked</h4>
-      <p>Tally can't see traffic while it isn't running, and counters restart on reboot, so traffic between startup and Tally launching is lost. Untracked periods show as gaps, never as zero.</p>
+      <p>Overlook can't see traffic while it isn't running, and counters restart on reboot, so traffic between startup and Overlook launching is lost. Untracked periods show as gaps, never as zero.</p>
       <h4>Known limits</h4>
       <p>Counters include local-network traffic (casting, file sharing, backups to a NAS), which may not count against a data cap. VPN traffic is counted once, on the adapter that carries it. Virtual adapters (VPN, Hyper-V, Docker, WSL) are excluded. There's no per-app breakdown.</p>
       <h4>Privacy</h4>
-      <p>All data stays in a local SQLite database. Tally doesn't transmit anything and never reads your location; the Location permission only unlocks Wi-Fi names.</p>
+      <p>All data stays in a local SQLite database. Overlook doesn't transmit anything and never reads your location; the Location permission only unlocks Wi-Fi names.</p>
     </div>
   );
 }

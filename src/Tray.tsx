@@ -67,8 +67,8 @@ export default function Tray() {
       )}
 
       <div style={{ display: "flex", gap: 6, borderTop: "1px solid var(--border)", paddingTop: 12 }}>
-        <button className="btn primary" style={{ flex: 1, justifyContent: "center" }} onClick={() => api.showMain()}>Open Tally</button>
-        <button className="btn icon-only" title="Quit Tally. Usage isn't recorded while it's closed." onClick={() => api.quit()}><Icon name="power" size={14} /></button>
+        <button className="btn primary" style={{ flex: 1, justifyContent: "center" }} onClick={() => api.showMain()}>Open Overlook</button>
+        <button className="btn icon-only" title="Quit Overlook. Usage isn't recorded while it's closed." onClick={() => api.quit()}><Icon name="power" size={14} /></button>
       </div>
     </div>
   );

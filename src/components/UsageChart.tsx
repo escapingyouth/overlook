@@ -125,7 +125,7 @@ export function UsageChart({ report, mode, height = 260, compact = false }: { re
         <div className="chart-empty">
           <div>
             <strong>{tracked ? "No data used in this period" : "Not tracked during this period"}</strong>
-            {tracked ? "Usage appears here as it's recorded." : "Tally can only count traffic while it's running."}
+            {tracked ? "Usage appears here as it's recorded." : "Overlook can only count traffic while it's running."}
           </div>
         </div>
       )}
@@ -133,7 +133,7 @@ export function UsageChart({ report, mode, height = 260, compact = false }: { re
         <div className="tooltip" style={{ top: 4, left: flip ? undefined : tipLeft + 14, right: flip ? width - tipLeft + 14 : undefined }}>
           <div className="t-title">{bucketTitle(hovered, report.granularity)}</div>
           {hovered.rx === null ? (
-            <div className="t-row">Not tracked: Tally wasn't running</div>
+            <div className="t-row">Not tracked: Overlook wasn't running</div>
           ) : (
             <>
               {mode !== "upload" && <div className="t-row"><span className="swatch" style={{ background: "var(--download)" }} />Download<span className="v num">{bytes(hovered.rx)}</span></div>}
@@ -273,7 +273,7 @@ export function TrendChart({ report, show, height = 280 }: { report: Report; sho
         <div className="chart-empty">
           <div>
             <strong>{series.length === 0 ? "No series selected" : segments.length ? "No data used in this period" : "Not tracked during this period"}</strong>
-            {series.length === 0 ? "Turn on Download or Upload in the legend." : segments.length ? "Usage appears here as it's recorded." : "Tally can only count traffic while it's running."}
+            {series.length === 0 ? "Turn on Download or Upload in the legend." : segments.length ? "Usage appears here as it's recorded." : "Overlook can only count traffic while it's running."}
           </div>
         </div>
       )}
@@ -281,7 +281,7 @@ export function TrendChart({ report, show, height = 280 }: { report: Report; sho
         <div className="tooltip" style={{ top: 0, left: flip ? undefined : x(hover!) + 14, right: flip ? width - x(hover!) + 14 : undefined }}>
           <div className="t-title">{bucketTitle(hovered, report.granularity)}</div>
           {hovered.rx === null ? (
-            <div className="t-row">Not tracked: Tally wasn't running</div>
+            <div className="t-row">Not tracked: Overlook wasn't running</div>
           ) : (
             <>
               <div className="t-row"><span className="swatch" style={{ background: "var(--download)", borderRadius: "50%" }} />Download<span className="v num">{bytes(hovered.rx)}</span></div>

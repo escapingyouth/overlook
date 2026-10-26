@@ -251,7 +251,7 @@ function DaysTable({ report }: { report: Report }) {
                 <td className="r num" style={{ fontWeight: 500 }}>{d.coveredSeconds ? bytes(d.rx + d.tx) : "—"}</td>
                 <td>
                   {!d.coveredSeconds ? (
-                    <span className="pill muted" title="Tally wasn't running"><Icon name="clock" size={13} />Not tracked</span>
+                    <span className="pill muted" title="Overlook wasn't running"><Icon name="clock" size={13} />Not tracked</span>
                   ) : d.estimated > 0 ? (
                     <span className="pill warn" title="Attributed across a network switch or a sleep/restart gap"><Icon name="alert" size={13} />{bytes(d.estimated)} estimated</span>
                   ) : (
@@ -314,7 +314,7 @@ function Footnote({ report, network, onAccuracy }: { report: Report; network: Ne
   return (
     <div className="footnote">
       <Icon name="info" size={13} style={{ marginTop: 1, flex: "none" }} />
-      <span>{parts.join(" ")} <button className="link" onClick={onAccuracy}>How Tally measures</button></span>
+      <span>{parts.join(" ")} <button className="link" onClick={onAccuracy}>How Overlook measures</button></span>
     </div>
   );
 }

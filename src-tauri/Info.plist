@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>NSLocationUsageDescription</key>
-    <string>macOS only shares Wi-Fi network names with apps that have Location access. Tally uses it to label networks by name, and never reads or stores your location.</string>
+    <string>macOS only shares Wi-Fi network names with apps that have Location access. Overlook uses it to label networks by name, and never reads or stores your location.</string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>macOS only shares Wi-Fi network names with apps that have Location access. Tally uses it to label networks by name, and never reads or stores your location.</string>
+    <string>macOS only shares Wi-Fi network names with apps that have Location access. Overlook uses it to label networks by name, and never reads or stores your location.</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.utilities</string>
 </dict>

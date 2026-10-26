@@ -2,7 +2,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useEffect, useState } from "react";
 
 export type Appearance = "system" | "light" | "dark";
-const KEY = "tally.appearance";
+const KEY = "overlook.appearance";
 const media = window.matchMedia("(prefers-color-scheme: dark)");
 
 export const getAppearance = (): Appearance => (localStorage.getItem(KEY) as Appearance) || "system";

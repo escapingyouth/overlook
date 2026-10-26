@@ -1,18 +1,18 @@
 [package]
-name = "tally"
+name = "overlook"
 version = "2.0.0"
 description = "Per-network data usage tracker"
 edition = "2021"
 
 [lib]
-name = "tally_lib"
+name = "overlook_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tally-core = { path = "../crates/tally-core" }
+overlook-core = { path = "../crates/overlook-core" }
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }

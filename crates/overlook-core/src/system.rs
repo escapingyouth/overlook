@@ -129,7 +129,7 @@ pub fn neighbor_mac(_ip: &str, interface: &str) -> Option<String> {
     use core_foundation::base::{CFType, TCFType};
     use core_foundation::dictionary::CFDictionary;
     use core_foundation::string::CFString;
-    let store = system_configuration::dynamic_store::SCDynamicStoreBuilder::new("Tally").build()?;
+    let store = system_configuration::dynamic_store::SCDynamicStoreBuilder::new("Overlook").build()?;
     let keys = store.get_keys("State:/Network/Service/[^/]+/IPv4")?;
     keys.iter().find_map(|key| {
         let value = store.get(key.clone())?;
