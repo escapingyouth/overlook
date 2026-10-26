@@ -53,7 +53,7 @@ impl AppTracker {
         let mut out: BTreeMap<&str, (u64, u64)> = BTreeMap::new();
         if attributable {
             for p in &procs {
-                // ponytail: a pid first seen mid-interval is counted from zero; bytes from processes that start and exit between samples are lost, upgrade by having the source report exits.
+                // ponytail: a pid first seen mid-interval is counted from zero; on Linux, bytes from processes that start and exit between samples are lost (macOS reports exits), upgrade by having the helper report them too.
                 let (rx, tx) = match self.procs.get(&p.pid) {
                     Some((path, rx, tx)) if *path == p.path => (p.rx.saturating_sub(*rx), p.tx.saturating_sub(*tx)),
                     _ => (p.rx, p.tx),
