@@ -33,6 +33,12 @@ static size_t nrecs, caprecs;
 // ponytail: linear scan over pids with sockets (a few hundred); hash it if that grows.
 static struct rec *rec_for(int32_t pid) {
     for (size_t i = 0; i < nrecs; i++) if (recs[i].pid == pid) return &recs[i];
+    // Snapshots prune dead pids every sample; this only bites once per-app is off but the manager still runs.
+    if (nrecs >= 4096)
+        for (size_t i = 0; i < nrecs;) {
+            if (kill(recs[i].pid, 0) == -1 && errno == ESRCH) free(recs[i].path), recs[i] = recs[--nrecs];
+            else i++;
+        }
     if (nrecs == caprecs) {
         size_t c = caprecs ? caprecs * 2 : 64;
         struct rec *r = realloc(recs, c * sizeof *r);
@@ -47,8 +53,8 @@ static struct rec *rec_for(int32_t pid) {
 
 static uint64_t num(CFDictionaryRef d, CFStringRef k) {
     int64_t v = 0;
-    CFNumberRef n = CFDictionaryGetValue(d, k);
-    if (n) CFNumberGetValue(n, kCFNumberSInt64Type, &v);
+    CFTypeRef n = d ? CFDictionaryGetValue(d, k) : NULL;
+    if (n && CFGetTypeID(n) == CFNumberGetTypeID()) CFNumberGetValue(n, kCFNumberSInt64Type, &v);
     return v > 0 ? (uint64_t)v : 0;
 }
 
