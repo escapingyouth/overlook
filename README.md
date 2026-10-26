@@ -11,9 +11,9 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (45 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (46 tests)
 cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
-cargo test --workspace                   # everything, including the shell (56 tests)
+cargo test --workspace                   # everything, including the shell (58 tests)
 npm test                              # ranges, buckets, statistics, per-app (21 tests)
 ```
 
@@ -109,7 +109,7 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
 ### Limitations
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
-- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB.
+- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Caps on a single app (needs per-app tracking) only alert. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB.
 - Per-app tracking is opt-in and only counts from when it's turned on.
 - On macOS, per-app counts closed connections too, including short downloads that open and close between samples. It uses NetworkStatistics, a private Apple framework that a future macOS may change or remove; if it does, per-app shows an error and network totals are unaffected.
 - On Linux, per-app reads the connections open at each 30 s sample, so bytes a connection moves after the last sample before it closes are missed, and a short download that opens and closes between samples isn't counted at all. It also counts TCP only (UDP/QUIC lands in System).

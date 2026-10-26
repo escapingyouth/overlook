@@ -174,6 +174,11 @@ function General({ status }: Readonly<{ status: Status }>) {
           setLogin(await isEnabled());
         }} />
       </Setting>
+      {status.platform !== "windows" && (
+        <Setting title={status.platform === "macos" ? "Speed in menu bar" : "Speed in tray"} desc="Shows live download and upload speed next to the Overlook icon.">
+          <Toggle label="Show speed next to the icon" checked={status.trayRate} onChange={(v) => api.setTrayRate(v)} />
+        </Setting>
+      )}
       <Setting title="Wi-Fi network names" desc={status.platform === "linux" ? "Read with iw or NetworkManager." : "Your OS requires Location access to share Wi-Fi names. Overlook never reads or stores your location."}>
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <span className="muted" style={{ whiteSpace: "nowrap" }}>{access}</span>

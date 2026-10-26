@@ -32,6 +32,7 @@ export interface Status {
   retentionMonths: number;
   uploadAlerts: boolean;
   canThrottle: boolean;
+  trayRate: boolean;
 }
 
 export interface Cap {
@@ -44,12 +45,15 @@ export interface Cap {
   alerts: number[];
   action: "none" | "block" | "throttle";
   throttleKbps: number;
+  /** Counts one app's usage instead of the network's; alerts only. */
+  appId: number | null;
 }
 
 export interface CapUsage extends Cap {
   used: number;
   start: number;
   end: number;
+  appName: string | null;
 }
 
 export interface AppTotal {
@@ -87,6 +91,7 @@ export const api = {
   saveCap: (cap: Cap) => invoke("save_cap", { cap }),
   deleteCap: (id: number) => invoke("delete_cap", { id }),
   setUploadAlerts: (on: boolean) => invoke("set_upload_alerts", { on }),
+  setTrayRate: (on: boolean) => invoke("set_tray_rate", { on }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),
   saveExport: (fileName: string, contents: string) => invoke<string>("save_export", { fileName, contents }),
