@@ -19,10 +19,29 @@ npm test                              # ranges, buckets, statistics, per-app (21
 
 On Linux and Windows the per-app helper sidecar is built by `node scripts/build-helper.mjs`. `npm run tauri dev` and `npm run tauri build` run it automatically; run it by hand before a bare `cargo build -p overlook`.
 
-Build each OS's installer on that OS (or in CI with a matrix). The core crate type-checks for all three targets from any host:
+Build each OS's installer on that OS; the release workflow (below) does all three in CI. The core crate type-checks for all three targets from any host:
 `cargo check -p overlook-core --no-default-features --target x86_64-pc-windows-msvc`.
 
 Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?platform=windows&access=denied` (or `#tray`). In that mode a dev-only mock (`src/dev/mock.ts`) supplies synthetic history; it is never included in a build.
+
+## Branches & releases
+- `main` is what ships. Releases are only ever built from it.
+- `dev` collects finished work before it goes to `main`.
+- Work happens on a branch off `dev` (for example `feat/top-apps`), merged back with a pull request.
+
+Both `main` and `dev` are protected by repository rulesets: changes land only through pull requests, and force pushes and branch deletion are blocked. No one is exempt, admins included.
+
+To release:
+1. Bump the version in a pull request to `dev`. `src-tauri/tauri.conf.json` sets the release version; keep `package.json` and `src-tauri/Cargo.toml` in step.
+2. Open a pull request from `dev` to `main` and merge it.
+3. Tag the merged commit on `main` and push the tag:
+   ```sh
+   git switch main && git pull
+   git tag v2.1.0 && git push origin v2.1.0
+   ```
+4. [`.github/workflows/release.yml`](.github/workflows/release.yml) first checks that the tagged commit is on `main`, and stops if it isn't. It then builds macOS (universal `.app`/`.dmg`), Windows (`.msi`/`.exe`) and Linux (`.deb`/`.rpm`/`.AppImage`, built on Ubuntu 22.04) and attaches them to a **draft** GitHub release. Review the draft and publish it.
+
+macOS builds are unsigned until the Apple secrets in the workflow are set, so Gatekeeper warns on first open.
 
 ## Architecture
 ```
