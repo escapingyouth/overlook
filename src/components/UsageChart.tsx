@@ -247,7 +247,12 @@ export function TrendChart({ report, show, height = 280, picked = null, onPick }
 
   return (
     <div className={`chart ${onPick ? "pickable" : ""}`} ref={ref} style={{ height }} onMouseLeave={() => setHover(null)}
-      {...(onPick && { tabIndex: 0, onKeyDown: onKey, onBlur: () => setHover(null), "aria-label": "Usage trend. Use the arrow keys to move between periods, Enter to see what used data, Escape to clear." })}>
+      {...(onPick && { tabIndex: 0, role: "group", "aria-roledescription": "chart", onKeyDown: onKey, onBlur: () => setHover(null), "aria-label": "Usage trend. Use the arrow keys to move between periods, Enter to see what used data, Escape to clear." })}>
+      {onPick && (
+        <div className="sr-only" aria-live="polite">
+          {hovered && `${bucketTitle(hovered, report.granularity)}: ${hovered.rx === null ? "not tracked" : `${bytes(bucketTotal(hovered) ?? 0)} used`}${hover === picked ? ", selected" : ""}`}
+        </div>
+      )}
       {width > 0 && (
         <svg width={width} height={height} onMouseMove={onMove} onClick={onPick && (() => pick(hover))} role="img" aria-label={`Download and upload trend, ${report.granularity} totals in ${unit}`}>
           <defs>

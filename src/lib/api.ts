@@ -75,6 +75,11 @@ export interface AppsReport {
 
 export const displayName = (n: Network) => n.customName ?? n.name;
 
+const hotspotKey = (id: number) => `overlook.hotspotDismissed.${id}`;
+/** A detected hotspot the user hasn't marked "Not a hotspot". */
+export const isHotspot = (a: Status["live"]["active"][number] | undefined) => !!a?.hotspot && localStorage.getItem(hotspotKey(a.networkId)) !== "1";
+export const dismissHotspot = (id: number) => localStorage.setItem(hotspotKey(id), "1");
+
 export const api = {
   status: () => invoke<Status>("status"),
   usage: (network: number | null, fromHour: number, toHour: number) =>

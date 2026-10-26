@@ -157,7 +157,7 @@ impl Collector {
                 let router_mac = system::normalize_mac(&gateway.mac_addr.to_string()).or_else(|| self.cached_mac(&ip, &i.name));
                 let wifi = system::is_wifi(i);
                 let ssid = if wifi { self.cached_ssid(i, router_mac.as_deref()) } else { None };
-                let hotspot = self.cached_metered(i, router_mac.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
+                let hotspot = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
                 Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot })
             })
             .collect()
@@ -173,9 +173,9 @@ impl Collector {
         Some(mac)
     }
 
-    /// Keyed by router too, so joining another network re-checks at once.
-    fn cached_metered(&mut self, i: &netdev::Interface, router: Option<&str>) -> bool {
-        let key = format!("{}|{}", i.name, router.unwrap_or(""));
+    /// Keyed by router and SSID too, so joining another network re-checks at once even when one of them is unknown.
+    fn cached_metered(&mut self, i: &netdev::Interface, router: Option<&str>, ssid: Option<&str>) -> bool {
+        let key = format!("{}|{}|{}", i.name, router.unwrap_or(""), ssid.unwrap_or(""));
         match self.metered_cache.get(&key) {
             Some(&(m, at)) if at.elapsed() < Duration::from_secs(120) => m,
             _ => {

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState } from "react";
 import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
+import { api, dismissHotspot, displayName, isHotspot, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
@@ -29,6 +29,8 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   const [pickedAt, setPickedAt] = useState<number | null>(null);
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
+  // Dismissal lives in localStorage; this re-renders the header and callout when it changes.
+  const [, setDismissals] = useState(0);
   const report = useReport(network?.id ?? null, range, granularity[range], status.firstCoveredHour);
   if (!report) return null;
   const info = rangeInfo(range);
@@ -53,7 +55,10 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
 
-      <HotspotCallout status={status} network={network} onNewCap={onNewCap} />
+      <HotspotCallout status={status} network={network} onNewCap={onNewCap} onDismiss={(id) => {
+        dismissHotspot(id);
+        setDismissals((n) => n + 1);
+      }} />
       <CapsCard status={status} network={network} onManage={onCaps} />
 
       <div className="main-grid">
@@ -115,14 +120,17 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
 }
 
 /** Phone plans run out fast: offer a cap when the network in view is a hotspot nothing caps yet. */
-function HotspotCallout({ status, network, onNewCap }: Readonly<{ status: Status; network: Network | null; onNewCap: (id: number) => void }>) {
+function HotspotCallout({ status, network, onNewCap, onDismiss }: Readonly<{
+  status: Status;
+  network: Network | null;
+  onNewCap: (id: number) => void;
+  onDismiss: (id: number) => void;
+}>) {
   const caps = useCaps();
-  const [dismissed, setDismissed] = useState<string | null>(null);
   const id = network?.id ?? status.live.primary;
   const active = status.live.active.find((a) => a.networkId === id);
   const n = status.networks.find((x) => x.id === id);
-  const key = `overlook.hotspotDismissed.${id}`;
-  if (!active?.hotspot || !n || !caps || caps.some((c) => c.networkId === id && c.appId === null) || dismissed === key || localStorage.getItem(key)) return null;
+  if (!isHotspot(active) || !n || !caps || caps.some((c) => c.networkId === id && c.appId === null)) return null;
   return (
     <section className="callout" aria-label="Phone hotspot">
       <span className="icon-tile lg"><Icon name="phone" size={18} /></span>
@@ -130,10 +138,7 @@ function HotspotCallout({ status, network, onNewCap }: Readonly<{ status: Status
         <div className="callout-title">{network ? "This looks like a phone hotspot" : `You're on a phone hotspot · ${displayName(n)}`}</div>
         <div className="muted" style={{ fontSize: 12.5 }}>Mobile data runs out fast. Set a cap to get alerts, or a hard stop, before the plan does.</div>
       </div>
-      <button className="btn ghost" onClick={() => {
-        localStorage.setItem(key, "1");
-        setDismissed(key);
-      }}>Not a hotspot</button>
+      <button className="btn ghost" onClick={() => onDismiss(n.id)}>Not a hotspot</button>
       <button className="btn primary" onClick={() => onNewCap(n.id)}>Set a cap</button>
     </section>
   );
@@ -163,7 +168,7 @@ function PageHead({ status, network }: Readonly<{ status: Status; network: Netwo
         <div className="muted" style={{ display: "flex", alignItems: "center", gap: 7, fontSize: 12.5 }}>
           <span className={`dot ${live ? "" : "off"}`} />
           {network
-            ? active ? `Connected · ${active.hotspot ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
+            ? active ? `Connected · ${isHotspot(active) ? "Phone hotspot" : active.kind === "wifi" ? "Wi-Fi" : "Ethernet"} · ${active.interface}` : `Not connected · last seen ${ago(network.lastSeen)}`
             : current ? `${status.networks.length} networks · on ${displayName(current)}` : `${status.networks.length} networks · offline`}
         </div>
       </div>

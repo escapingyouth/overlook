@@ -216,7 +216,9 @@ fn weekly_summary<Tz: TimeZone>(store: &Store, tz: &Tz, now: f64) -> Option<Noti
         let name = names.get(&top.network_id).map_or("one network", String::as_str);
         parts.push(if used.len() == 1 { format!("All on {name}.") } else { format!("Most on {name} ({}).", gb(top.rx + top.tx)) });
     }
-    if let Some(app) = store.apps_report(None, from, to).apps.into_iter().find(|a| a.key != SYSTEM_KEY && a.rx + a.tx > 0) {
+    // Turning per-app off keeps its history, but the summary should follow the setting.
+    let per_app = store.meta("per_app").as_deref() == Some("on");
+    if let Some(app) = store.apps_report(None, from, to).apps.into_iter().find(|a| per_app && a.key != SYSTEM_KEY && a.rx + a.tx > 0) {
         parts.push(format!("Top app: {} ({}).", app.name, gb(app.rx + app.tx)));
     }
     Some(Notice { title: format!("Last week: {} used", gb(total)), body: parts.join(" ") })
@@ -230,10 +232,11 @@ fn app_spikes(store: &Store, v: &mut Verdict, network: i64, network_name: &str, 
         return;
     }
     let past = store.apps_report(Some(network), h - 14 * 24, h - 1).apps;
+    let local_day = Local.timestamp_opt(h * 3600, 0).single().map_or(h.div_euclid(24).to_string(), |t| t.date_naive().to_string());
     for app in store.apps_report(Some(network), h, h).apps.into_iter().filter(|a| a.key != SYSTEM_KEY) {
         let current = app.rx + app.tx;
         let typical = past.iter().find(|p| p.id == app.id).map_or(0, |p| ((p.rx + p.tx) as f64 / history) as i64);
-        if current > (typical * UPLOAD_FACTOR).max(UPLOAD_FLOOR) && store.mark_once(&format!("app:{}:{network}:{}", app.id, h.div_euclid(24))) {
+        if current > (typical * UPLOAD_FACTOR).max(UPLOAD_FLOOR) && store.mark_once(&format!("app:{}:{network}:{local_day}", app.id)) {
             let usual = if typical > 0 { format!("vs about {} in a typical hour", gb(typical)) } else { "and it rarely uses data here".into() };
             v.notices.push(Notice {
                 title: format!("{} is using a lot of data", app.name),
@@ -398,12 +401,20 @@ mod tests {
         s.add(&UsageDelta { network_id: home, rx: 18_000_000_000, tx: 1_000_000_000, estimated: false, at: day(21, 10) });
         s.add(&UsageDelta { network_id: cafe, rx: 4_000_000_000, tx: 0, estimated: false, at: day(25, 15) });
         s.add_app_usage(home, steam, day(21, 10), 9_000_000_000, 0);
+        s.set_meta("per_app", "on");
 
         assert_eq!(weekly_summary(&s, &Utc, day(26, 8)), None, "waits for 09:00");
         let n = weekly_summary(&s, &Utc, day(26, 9)).unwrap();
         assert_eq!(n.title, "Last week: 23 GB used");
         assert_eq!(n.body, "Up 15% on the week before. Most on Home (19 GB). Top app: Steam (9.0 GB).");
         assert_eq!(weekly_summary(&s, &Utc, day(27, 9)), None, "once a week");
+
+        // Per-app turned off: its history stays, but the next summary leaves the app out.
+        s.set_meta("per_app", "off");
+        s.add(&UsageDelta { network_id: home, rx: 1_000_000_000, tx: 0, estimated: false, at: day(28, 10) });
+        s.add_app_usage(home, steam, day(28, 10), 1_000_000_000, 0);
+        let n = weekly_summary(&s, &Utc, Utc.with_ymd_and_hms(2026, 11, 2, 9, 0, 0).unwrap().timestamp() as f64).unwrap();
+        assert!(!n.body.contains("Steam"), "{}", n.body);
     }
 
     #[test] fn weekly_summary_skips_an_empty_week_and_untracked_comparisons() {
