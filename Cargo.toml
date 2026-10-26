@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/overlook-core", "src-tauri"]
+members = ["crates/overlook-core", "crates/overlook-helper", "src-tauri"]
 resolver = "2"
 
 [profile.release]

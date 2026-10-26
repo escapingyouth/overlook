@@ -23,6 +23,7 @@ export interface Status {
     primary: number | null;
     rate: [number, number] | null;
     lastSample: number;
+    perApp: { enabled: boolean; error: string | null; experimental: boolean };
   };
   firstCoveredHour: number | null;
   wifiNameAccess: "granted" | "denied" | "notDetermined" | "unknown";
@@ -51,12 +52,31 @@ export interface CapUsage extends Cap {
   end: number;
 }
 
+export interface AppTotal {
+  id: number;
+  key: string;
+  name: string;
+  icon: string | null;
+  rx: number;
+  tx: number;
+}
+
+export interface AppsReport {
+  apps: AppTotal[];
+  coveredRx: number;
+  coveredTx: number;
+  sinceHour: number | null;
+}
+
 export const displayName = (n: Network) => n.customName ?? n.name;
 
 export const api = {
   status: () => invoke<Status>("status"),
   usage: (network: number | null, fromHour: number, toHour: number) =>
     invoke<{ rows: HourRow[]; coverage: [number, number][] }>("usage", { network, fromHour, toHour }),
+  apps: (network: number | null, fromHour: number, toHour: number) => invoke<AppsReport>("apps", { network, fromHour, toHour }),
+  setPerApp: (enabled: boolean) => invoke("set_per_app", { enabled }),
+  deleteAppData: () => invoke("delete_app_data"),
   totals: (fromHour: number, toHour: number) => invoke<{ networkId: number; rx: number; tx: number }[]>("totals", { fromHour, toHour }),
   droppedBytes: (since: number) => invoke<number>("dropped_bytes", { since }),
   rename: (id: number, name: string | null) => invoke("rename_network", { id, name }),
@@ -112,4 +132,11 @@ export function useReport(network: number | null, range: RangeId, granularity: G
     const { rows, coverage } = await api.usage(network, queryStartHour(range, now), hourOf(now.getTime()) + 1);
     return buildReport({ range, granularity, rows, coverage, historyStartHour, now });
   }, [network, range, granularity, historyStartHour]);
+}
+
+export function useApps(network: number | null, range: RangeId) {
+  return useLive<AppsReport>(() => {
+    const now = new Date();
+    return api.apps(network, queryStartHour(range, now), hourOf(now.getTime()) + 1);
+  }, [network, range]);
 }

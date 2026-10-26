@@ -401,3 +401,17 @@ body.tray-body { background: transparent; }
 :is(.chip, .choice, .cap-item, .link):focus-visible { outline: 2px solid var(--download); outline-offset: 2px; }
 .limit-input input { appearance: textfield; -moz-appearance: textfield; }
 .limit-input input::-webkit-inner-spin-button, .limit-input input::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+
+/* Top apps */
+.app-icon { width: 20px; height: 20px; border-radius: 5px; flex: none; }
+.table .name-cell .app-icon { margin: 3px; }
+.share { display: flex; align-items: center; justify-content: flex-end; gap: 10px; }
+.share .bar { width: 72px; height: 4px; border-radius: 2px; background: var(--surface-2); overflow: hidden; }
+.share .bar > i { display: block; height: 100%; border-radius: 2px; background: linear-gradient(90deg, var(--download), var(--upload)); }
+.stack { display: inline-flex; margin-right: 4px; }
+.stack .app-icon, .stack .icon-tile { width: 18px; height: 18px; border-radius: 5px; margin-left: -6px; box-shadow: 0 0 0 2px var(--surface); }
+.stack > :first-child { margin-left: 0; }
+.panel-note { padding: 10px 20px; font-size: 12px; color: var(--text-3); border-top: 1px solid var(--border); }
+.panel-empty { padding: 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
+.table button.more { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
+.table button.more:hover { color: var(--text); }

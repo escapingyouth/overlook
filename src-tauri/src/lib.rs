@@ -1,10 +1,13 @@
+mod helper;
+
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{mpsc, Mutex};
 use std::time::Duration;
+use overlook_core::apps::AppTracker;
 use overlook_core::caps::{self, Cap, CapUsage, Verdict};
 use overlook_core::enforce::{self, Enforcer};
-use overlook_core::store::{HourRow, Network, NetworkTotal, Store};
+use overlook_core::store::{AppsReport, HourRow, Network, NetworkTotal, Store};
 use overlook_core::system::{self, WifiNameAccess};
 use overlook_core::{Collector, LiveStatus, SAMPLE_INTERVAL};
 use tauri::menu::{Menu, MenuItem};
@@ -72,6 +75,35 @@ fn totals(state: State<AppState>, from_hour: i64, to_hour: i64) -> Vec<NetworkTo
 #[tauri::command]
 fn dropped_bytes(state: State<AppState>, since: f64) -> i64 {
     state.collector.lock().unwrap().store.dropped_bytes(since)
+}
+
+#[tauri::command]
+fn apps(state: State<AppState>, network: Option<i64>, from_hour: i64, to_hour: i64) -> AppsReport {
+    state.collector.lock().unwrap().store.apps_report(network, from_hour, to_hour)
+}
+
+// async so the elevation prompt doesn't block the main thread; the collector isn't locked while it's up.
+#[tauri::command]
+async fn set_per_app(app: AppHandle, state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
+    helper::set_installed(enabled)?;
+    {
+        let mut c = state.collector.lock().unwrap();
+        c.store.set_meta("per_app", if enabled { "on" } else { "off" });
+        c.per_app = enabled;
+        c.status.per_app.enabled = enabled;
+        c.status.per_app.error = None;
+        if !enabled {
+            c.tracker = AppTracker::default();
+        }
+    }
+    app.emit("overlook://changed", ()).ok();
+    Ok(())
+}
+
+#[tauri::command]
+fn delete_app_data(app: AppHandle, state: State<AppState>) {
+    state.collector.lock().unwrap().store.delete_app_data();
+    app.emit("overlook://changed", ()).ok();
 }
 
 #[tauri::command]
@@ -324,7 +356,7 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(tauri::generate_handler![
-            status, usage, totals, dropped_bytes, rename_network, delete_network, delete_all,
+            status, usage, totals, apps, set_per_app, delete_app_data, dropped_bytes, rename_network, delete_network, delete_all,
             set_retention, caps, save_cap, delete_cap, set_upload_alerts, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())

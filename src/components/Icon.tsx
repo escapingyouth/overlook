@@ -15,6 +15,8 @@ import {
   Clock01Icon,
   CloudDownloadIcon,
   CloudUploadIcon,
+  ComputerIcon,
+  CubeIcon,
   Download04Icon,
   Tick02Icon,
   ArrowDown02Icon,
@@ -75,6 +77,8 @@ const icons = {
   gauge: DashboardSpeed01Icon,
   plus: PlusSignIcon,
   back: ArrowLeft01Icon,
+  app: CubeIcon,
+  computer: ComputerIcon,
 } as const;
 
 export type IconName = keyof typeof icons;
