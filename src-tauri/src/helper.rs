@@ -65,7 +65,7 @@ if (Test-Path -LiteralPath $dir) { Remove-Item -LiteralPath $dir -Recurse -Force
 
 /// Non-elevated PowerShell: elevates one PowerShell with `$env:OVERLOOK_ARGS` (space-joined, space-free tokens).
 /// A cancelled UAC prompt throws, which becomes exit 1.
-pub const WIN_OUTER: &str = r#"try { $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ($env:OVERLOOK_ARGS -split ' '); exit $p.ExitCode } catch { exit 1 }"#;
+pub const WIN_OUTER: &str = r#"try { $p = Start-Process -FilePath (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList ($env:OVERLOOK_ARGS -split ' '); if ($p.ExitCode -ne 0) { exit 1 }; exit 0 } catch { exit 1 }"#;
 
 /// Same rules as the helper's `Owner::parse` on Windows.
 pub fn valid_windows_user(s: &str) -> bool {
