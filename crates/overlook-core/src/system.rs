@@ -257,38 +257,44 @@ pub const SNAPSHOT_PATH: &str = "/run/overlook-helper/counters.json";
 #[cfg(target_os = "windows")]
 pub const SNAPSHOT_PATH: &str = r"C:\ProgramData\Overlook\counters.json";
 
-// ponytail: one-shot `nettop -L 1` only sees open flows, so bytes of connections that close between samples are lost.
-// A long-lived `nettop -d` reader would catch them, but on macOS 27.2 a resident nettop burns ~1.4 cores even at -s 30;
-// upgrade by reading NetworkStatistics directly.
 #[cfg(target_os = "macos")]
-pub fn process_snapshot() -> Result<crate::apps::Snapshot, String> {
-    use crate::apps::{parse_nettop, ProcSample, Snapshot};
-    let child = Command::new("nettop")
-        .args(["-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"])
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .map_err(|e| format!("nettop failed: {e}"))?;
-    let pid = child.id() as i32;
-    // Runs under the collector lock, so a hung nettop must not hang the app.
-    let (send, recv) = std::sync::mpsc::channel();
-    std::thread::spawn(move || send.send(child.wait_with_output()).ok());
-    let Ok(Ok(out)) = recv.recv_timeout(std::time::Duration::from_secs(5)) else {
-        unsafe { libc::kill(pid, libc::SIGKILL) };
-        return Err("nettop didn't respond".into());
-    };
-    if !out.status.success() {
-        return Err("nettop failed".into());
-    }
-    let procs = parse_nettop(&String::from_utf8_lossy(&out.stdout)).into_iter().map(|(pid, rx, tx)| ProcSample { pid, path: pid_path(pid), rx, tx }).collect();
-    Ok(Snapshot { session: format!("nettop-{}", boot_time()), at: crate::now(), procs })
-}
+#[repr(C)]
+struct OvProc { pid: i32, rx: u64, tx: u64, path: [u8; 1024] }
 
 #[cfg(target_os = "macos")]
-fn pid_path(pid: u32) -> String {
-    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
-    let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
-    if n <= 0 { String::new() } else { String::from_utf8_lossy(&buf[..n as usize]).into_owned() }
+extern "C" {
+    fn ov_nstat_start() -> i32;
+    fn ov_nstat_snapshot(out: *mut OvProc, cap: usize) -> std::ffi::c_long;
+}
+
+/// Per-pid cumulative bytes from NetworkStatistics (src/nstat.c), closed connections included.
+/// Only called while per-app is on, so the manager starts on the first per-app sample.
+#[cfg(target_os = "macos")]
+pub fn process_snapshot() -> Result<crate::apps::Snapshot, String> {
+    use crate::apps::{ProcSample, Snapshot};
+    static SESSION: std::sync::OnceLock<Result<String, String>> = std::sync::OnceLock::new();
+    let session = SESSION
+        .get_or_init(|| match unsafe { ov_nstat_start() } {
+            0 => Ok(format!("nstat-{}", crate::now())),
+            e => Err(format!("Network statistics aren't available ({e})")),
+        })
+        .clone()?;
+    // ponytail: pids past CAP are dropped from this sample; raise CAP if a machine ever has that many with sockets.
+    const CAP: usize = 2048;
+    let mut buf: Vec<OvProc> = Vec::with_capacity(CAP);
+    let n = unsafe { ov_nstat_snapshot(buf.as_mut_ptr(), CAP) };
+    if n < 0 {
+        return Err("Network statistics didn't respond".into());
+    }
+    unsafe { buf.set_len(n as usize) };
+    let procs = buf
+        .iter()
+        .map(|p| {
+            let len = p.path.iter().position(|&c| c == 0).unwrap_or(p.path.len());
+            ProcSample { pid: p.pid as u32, path: String::from_utf8_lossy(&p.path[..len]).into_owned(), rx: p.rx, tx: p.tx }
+        })
+        .collect();
+    Ok(Snapshot { session, at: crate::now(), procs })
 }
 
 // Untested on this platform: written without a Windows/Linux machine to run on.
@@ -384,6 +390,14 @@ pub fn describe_app(key: &str) -> (String, Option<String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test] fn nstat_snapshot_works_unprivileged() {
+        let a = process_snapshot().expect("first snapshot");
+        let b = process_snapshot().expect("second snapshot");
+        assert_eq!(a.session, b.session);
+        assert!(b.procs.iter().all(|p| p.pid > 0));
+    }
 
     #[test] fn netsh_picks_ssid_for_adapter_not_bssid() {
         let out = "There is 1 interface on the system:\n\n    Name                   : Wi-Fi 2\n    SSID                   : Other\n\n    Name                   : Wi-Fi\n    Description            : Intel\n    BSSID                  : aa:bb:cc:dd:ee:ff\n    SSID                   : Home Net\n";

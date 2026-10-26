@@ -184,7 +184,7 @@ impl Collector {
         let processor = &self.processor;
         let tracker = &mut self.tracker;
         let per_app = self.per_app;
-        let snapshot = per_app.then(system::process_snapshot); // slow (nettop): run before the transaction opens
+        let snapshot = per_app.then(system::process_snapshot); // up to 2 s: run before the transaction opens
         let mut status = LiveStatus { last_sample: now, per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
 
         self.store.transaction(|store| {

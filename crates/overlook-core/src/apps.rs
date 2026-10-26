@@ -33,20 +33,6 @@ pub fn default_name(key: &str) -> String {
     file[..n].into()
 }
 
-/// `nettop -P -L 1 -x` CSV rows: `name.pid,bytes_in,bytes_out,`.
-pub fn parse_nettop(csv: &str) -> Vec<(u32, u64, u64)> {
-    csv.lines()
-        .filter_map(|line| {
-            let mut f: Vec<&str> = line.split(',').collect();
-            while f.last() == Some(&"") { f.pop(); }
-            let tx = f.pop()?.trim().parse().ok()?;
-            let rx = f.pop()?.trim().parse().ok()?;
-            let pid = f.join(",").rsplit_once('.')?.1.trim().parse().ok()?;
-            Some((pid, rx, tx))
-        })
-        .collect()
-}
-
 #[derive(Default)]
 pub struct AppTracker {
     procs: HashMap<u32, (String, u64, u64)>,
@@ -104,10 +90,6 @@ mod tests {
         assert_eq!(app_key("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), "c:\\program files\\google\\chrome\\application\\chrome.exe");
         assert_eq!(default_name("c:\\program files\\steam\\steam.exe"), "steam");
         assert_eq!(app_key("/usr/bin/firefox"), "/usr/bin/firefox"); // /usr/bin is NOT system: Linux apps live there
-    }
-    #[test] fn nettop_names_with_dots_and_commas() {
-        let csv = ",bytes_in,bytes_out,\nCode Helper (Plugin).812,10,20,\nFoo, Inc..44,5,6,\nlaunchd.1,0,0,\n";
-        assert_eq!(parse_nettop(csv), vec![(812, 10, 20), (44, 5, 6), (1, 0, 0)]);
     }
     #[test] fn tracker_first_sample_is_baseline() {
         let mut k = AppTracker::default();
