@@ -120,26 +120,49 @@ fn ok(status: std::io::Result<std::process::ExitStatus>) -> Result<(), String> {
     }
 }
 
+/// Copies the sidecar into a fresh 0700 directory only we can enter. mkdir and create_new fail if anything
+/// already exists, so another local user can't pre-create or swap the file root is about to install.
+#[cfg(unix)]
+fn stage(src: &std::path::Path, uid: u32) -> Result<std::path::PathBuf, String> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+    let err = |e: std::io::Error| e.to_string();
+    let base = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|d| std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir() && m.uid() == uid && m.permissions().mode() & 0o077 == 0))
+        .unwrap_or_else(std::env::temp_dir);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.subsec_nanos());
+    let dir = base.join(format!("overlook-helper-{}-{nanos}", std::process::id()));
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).map_err(err)?;
+    let copy = || -> std::io::Result<std::path::PathBuf> {
+        let path = dir.join("overlook-helper");
+        let mut out = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o700).open(&path)?;
+        std::io::copy(&mut std::fs::File::open(src)?, &mut out)?;
+        Ok(path)
+    };
+    copy().map_err(|e| {
+        std::fs::remove_dir_all(&dir).ok();
+        e.to_string()
+    })
+}
+
 #[cfg(target_os = "linux")]
 pub fn set_installed(install: bool) -> Result<(), String> {
     use std::os::unix::fs::MetadataExt;
+    let uid = std::fs::metadata("/proc/self").map_err(|e| e.to_string())?.uid();
     let mut src = std::path::PathBuf::new();
-    let mut tmp = None;
+    let mut staged = false;
     if install {
         src = sidecar()?;
         // An AppImage's FUSE mount isn't readable by root, so stage a copy outside it.
         if std::env::var_os("APPIMAGE").is_some() {
-            let t = std::env::temp_dir().join(format!("overlook-helper-{}", std::process::id()));
-            std::fs::copy(&src, &t).map_err(|e| e.to_string())?;
-            src = t.clone();
-            tmp = Some(t);
+            src = stage(&src, uid)?;
+            staged = true;
         }
     }
-    let uid = std::fs::metadata("/proc/self").map_err(|e| e.to_string())?.uid();
     let argv = linux_argv(install, &src.to_string_lossy(), uid);
     let res = ok(std::process::Command::new("pkexec").args(&argv).status());
-    if let Some(t) = tmp {
-        std::fs::remove_file(t).ok();
+    if staged {
+        std::fs::remove_dir_all(src.parent().unwrap()).ok();
     }
     res
 }
@@ -212,6 +235,20 @@ mod tests {
         assert_eq!(base64("hi"), "aGk=");
         assert_eq!(base64("abc"), "YWJj");
         assert_eq!(base64("abcd"), "YWJjZA==");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_makes_private_0700_copy() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let src = std::env::current_exe().unwrap();
+        let uid = std::fs::metadata(&src).unwrap().uid();
+        let p = stage(&src, uid).unwrap();
+        let dir = p.parent().unwrap();
+        assert_eq!(std::fs::metadata(dir).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o700);
+        assert_eq!(std::fs::read(&p).unwrap(), std::fs::read(&src).unwrap());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
