@@ -10,7 +10,7 @@ pub struct ProcSample { pub pid: u32, pub path: String, pub rx: u64, pub tx: u64
 #[derive(Deserialize)]
 pub struct Snapshot { pub session: String, pub at: f64, pub procs: Vec<ProcSample> }
 
-const SYSTEM_PREFIXES: [&str; 7] = ["/system/", "/usr/sbin/", "/usr/libexec/", "/sbin/", "/bin/", "/library/apple/", "/lib/systemd/"];
+const SYSTEM_PREFIXES: [&str; 8] = ["/system/", "/usr/sbin/", "/usr/libexec/", "/sbin/", "/bin/", "/library/apple/", "/lib/systemd/", "/usr/lib/systemd/"];
 
 pub fn app_key(path: &str) -> String {
     let lower = path.to_lowercase();
@@ -98,7 +98,7 @@ mod tests {
         assert_eq!(default_name("/Applications/Google Chrome.app"), "Google Chrome");
     }
     #[test] fn os_paths_are_system() {
-        for p in ["", "/usr/sbin/mDNSResponder", "/System/Library/PrivateFrameworks/X", "C:\\Windows\\System32\\svchost.exe", "/lib/systemd/systemd-resolved"] { assert_eq!(app_key(p), SYSTEM_KEY, "{p}"); }
+        for p in ["", "/usr/sbin/mDNSResponder", "/System/Library/PrivateFrameworks/X", "C:\\Windows\\System32\\svchost.exe", "/lib/systemd/systemd-resolved", "/usr/lib/systemd/systemd-resolved"] { assert_eq!(app_key(p), SYSTEM_KEY, "{p}"); }
     }
     #[test] fn windows_and_linux_keys() {
         assert_eq!(app_key("C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"), "c:\\program files\\google\\chrome\\application\\chrome.exe");
