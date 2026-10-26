@@ -1,3 +1,4 @@
+use crate::apps::SYSTEM_KEY;
 use crate::store::{hour_of, Store};
 use crate::ActiveNetwork;
 use chrono::{Datelike, Days, Local, Months, NaiveDate, TimeZone};
@@ -7,6 +8,8 @@ use std::collections::HashMap;
 // ponytail: fixed heuristic, make it a setting if people find it too chatty or too quiet.
 const UPLOAD_FLOOR: i64 = 250_000_000;
 const UPLOAD_FACTOR: i64 = 5;
+/// An app needs a day of per-app history before it can look unusual; until then everything is new.
+const APP_HISTORY_HOURS: f64 = 24.0;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -172,9 +175,31 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
                     body: format!("{} uploaded this hour, vs about {} in a typical hour.", gb(current), gb(typical)),
                 });
             }
+            app_spikes(store, &mut v, id, &name(Some(id)), h);
         }
     }
     v
+}
+
+/// An app using far more this hour than its typical hour on this network (or a lot, for an app new here).
+/// Once per app, network and day, so a long download alerts once rather than every hour.
+fn app_spikes(store: &Store, v: &mut Verdict, network: i64, network_name: &str, h: i64) {
+    let history = store.app_covered_hours(h - 14 * 24, h - 1);
+    if history < APP_HISTORY_HOURS {
+        return;
+    }
+    let past = store.apps_report(Some(network), h - 14 * 24, h - 1).apps;
+    for app in store.apps_report(Some(network), h, h).apps.into_iter().filter(|a| a.key != SYSTEM_KEY) {
+        let current = app.rx + app.tx;
+        let typical = past.iter().find(|p| p.id == app.id).map_or(0, |p| ((p.rx + p.tx) as f64 / history) as i64);
+        if current > (typical * UPLOAD_FACTOR).max(UPLOAD_FLOOR) && store.mark_once(&format!("app:{}:{network}:{}", app.id, h.div_euclid(24))) {
+            let usual = if typical > 0 { format!("vs about {} in a typical hour", gb(typical)) } else { "and it rarely uses data here".into() };
+            v.notices.push(Notice {
+                title: format!("{} is using a lot of data", app.name),
+                body: format!("{} on {network_name} this hour, {usual}.", gb(current)),
+            });
+        }
+    }
 }
 
 #[cfg(test)]
@@ -286,6 +311,37 @@ mod tests {
         assert_eq!(v.notices.len(), 1);
         assert_eq!(v.notices[0].title, "Sam’s iPhone looks like a phone hotspot");
         assert!(evaluate(&s, &[active(phone)], now).notices.is_empty());
+    }
+
+    #[test] fn app_spikes_alert_once_a_day_after_a_day_of_history() {
+        let s = Store::open(":memory:").unwrap();
+        let h = hour_of(crate::now());
+        let at = |hour: i64| hour as f64 * 3600.0 + 60.0;
+        let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, at(h)).unwrap();
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
+        let steady = s.insert_app("/Applications/Spotify.app", "Spotify", None);
+        let backup = s.insert_app("/Applications/Backblaze.app", "Backblaze", None);
+        let system = s.insert_app(SYSTEM_KEY, "System", None);
+        let busy_hour = |s: &Store| {
+            s.add_app_usage(id, steady, at(h), 400_000_000, 0); // 400 MB, but Spotify always does about that
+            s.add_app_usage(id, backup, at(h), 0, 300_000_000); // 300 MB from an app that's usually idle here
+            s.add_app_usage(id, system, at(h), 900_000_000, 0); // System is the unattributed rest, never singled out
+        };
+
+        // Brand-new per-app tracking: everything would look unusual, so nothing alerts.
+        busy_hour(&s);
+        assert!(evaluate(&s, &active, at(h)).notices.is_empty());
+
+        for past in h - 30..h {
+            s.add_app_coverage(past as f64 * 3600.0, (past + 1) as f64 * 3600.0);
+            s.add_app_usage(id, steady, at(past), 350_000_000, 0);
+        }
+        let v = evaluate(&s, &active, at(h));
+        assert_eq!(v.notices.len(), 1);
+        assert_eq!(v.notices[0].title, "Backblaze is using a lot of data");
+        assert_eq!(v.notices[0].body, "300 MB on Home this hour, and it rarely uses data here.");
+        assert!(evaluate(&s, &active, at(h)).notices.is_empty());
     }
 
     #[test] fn unusual_upload_alerts_once_per_hour() {
