@@ -71,7 +71,7 @@ export function TopApps({ network, range, status, onEnable }: { network: number 
                 <tr>
                   <td />
                   <td colSpan={5}>
-                    <button className="more" onClick={() => setAll(true)}>
+                    <button className="more" aria-expanded={all} aria-label={`Show ${hidden.length} more apps`} onClick={() => setAll(true)}>
                       <span className="stack">{hidden.slice(0, 3).map((a) => <AppIcon key={a.key} app={a} />)}</span>
                       + {hidden.length} more
                     </button>

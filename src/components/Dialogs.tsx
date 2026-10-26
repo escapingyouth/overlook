@@ -76,8 +76,8 @@ export function PerAppDialog({ status, onClose }: { status: Status; onClose: () 
         {error && <span className="pill warn">{error}</span>}
       </div>
       <div className="dialog-actions">
-        <button className="btn" onClick={onClose}>Cancel</button>
-        <button className="btn primary" autoFocus disabled={busy} onClick={turnOn}>Turn on</button>
+        <button className="btn" autoFocus onClick={onClose}>Cancel</button>
+        <button className="btn primary" disabled={busy} onClick={turnOn}>Turn on</button>
       </div>
     </Dialog>
   );
@@ -270,7 +270,7 @@ function DataPane({ status }: { status: Status }) {
           <span className="num">{bytes(dropped)}</span>
         </Setting>
       )}
-      <Setting title="Per-app tracking" desc="See which apps use data on each network. Runs a small helper process.">
+      <Setting title="Per-app tracking" desc={`See which apps use data on each network.${status.platform !== "macos" ? " Runs a small helper process." : ""}`}>
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
           {status.live.perApp.experimental && <span className="pill muted">Experimental</span>}
           {offError && <span className="pill warn">{offError}</span>}

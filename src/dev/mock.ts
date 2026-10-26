@@ -46,7 +46,8 @@ function usage(network: number | null, from: number, to: number) {
 
 const params = new URLSearchParams(location.search);
 const appsMode = params.get("apps");
-let perAppOn = appsMode !== "off";
+const platform = params.get("platform") ?? "macos";
+let perAppOn = appsMode !== "off" && appsMode !== "deny";
 
 // name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
 const appDefs: [string, string, number, number][] = [
@@ -77,10 +78,10 @@ mockIPC((cmd, args: any) => {
       return {
         networks: params.has("empty") ? [] : networks,
         live: { active: [{ networkId: 1, interface: "en0", kind: "wifi" }], primary: 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
-          perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: true } },
+          perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: platform !== "macos" } },
         firstCoveredHour: nowHour - 400 * 24,
         wifiNameAccess: params.get("access") ?? "granted",
-        platform: params.get("platform") ?? "macos",
+        platform,
         sampleInterval: 30,
         retentionMonths: 24,
       };
