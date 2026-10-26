@@ -1,4 +1,5 @@
 
+use crate::caps::Cap;
 use crate::processor::{Baseline, UsageDelta};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -74,7 +75,10 @@ impl Store {
                  interface TEXT PRIMARY KEY, boot INTEGER NOT NULL, rx INTEGER NOT NULL, tx INTEGER NOT NULL,
                  network_id INTEGER, at REAL NOT NULL);
              CREATE TABLE IF NOT EXISTS dropped (id INTEGER PRIMARY KEY, at REAL NOT NULL, bytes INTEGER NOT NULL, reason TEXT NOT NULL);
-             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);",
+             CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+             CREATE TABLE IF NOT EXISTS caps (
+                 id INTEGER PRIMARY KEY, network_id INTEGER, period TEXT NOT NULL, reset INTEGER NOT NULL,
+                 limit_bytes INTEGER NOT NULL, alerts TEXT NOT NULL, action TEXT NOT NULL, throttle_kbps INTEGER NOT NULL);",
         )?;
         Ok(Store { db })
     }
@@ -136,6 +140,7 @@ impl Store {
         self.transaction(|s| {
             s.db.execute("DELETE FROM usage WHERE network_id = ?", [id]).ok();
             s.db.execute("DELETE FROM networks WHERE id = ?", [id]).ok();
+            s.db.execute("DELETE FROM caps WHERE network_id = ?", [id]).ok();
             s.db.execute("UPDATE baselines SET network_id = NULL WHERE network_id = ?", [id]).ok();
         });
     }
@@ -239,6 +244,43 @@ impl Store {
         self.db.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", [key, value]).ok();
     }
 
+    /// True the first time a key is seen; used so each alert fires once.
+    pub fn mark_once(&self, key: &str) -> bool {
+        self.db.execute("INSERT OR IGNORE INTO meta (key, value) VALUES (?, '1')", [format!("sent:{key}")]).map_or(false, |n| n == 1)
+    }
+
+    pub fn caps(&self) -> Vec<Cap> {
+        let mut s = self.db.prepare("SELECT id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps FROM caps ORDER BY id").unwrap();
+        s.query_map([], |r| {
+            let alerts: String = r.get(5)?;
+            Ok(Cap {
+                id: r.get(0)?, network_id: r.get(1)?, period: r.get(2)?, reset: r.get(3)?, limit_bytes: r.get(4)?,
+                alerts: alerts.split(',').filter_map(|a| a.parse().ok()).collect(), action: r.get(6)?, throttle_kbps: r.get(7)?,
+            })
+        })
+        .unwrap()
+        .filter_map(Result::ok)
+        .collect()
+    }
+
+    pub fn save_cap(&self, c: &Cap) {
+        let alerts = c.alerts.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
+        let id = (c.id > 0).then_some(c.id);
+        // A changed limit or threshold should be able to alert again this period.
+        self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{}:%", c.id)]).ok();
+        self.db
+            .execute(
+                "INSERT OR REPLACE INTO caps (id, network_id, period, reset, limit_bytes, alerts, action, throttle_kbps) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                params![id, c.network_id, c.period, c.reset, c.limit_bytes.max(1), alerts, c.action, c.throttle_kbps.max(64)],
+            )
+            .ok();
+    }
+
+    pub fn delete_cap(&self, id: i64) {
+        self.db.execute("DELETE FROM caps WHERE id = ?", [id]).ok();
+        self.db.execute("DELETE FROM meta WHERE key LIKE ?", [format!("sent:cap:{id}:%")]).ok();
+    }
+
     pub fn prune(&mut self, before: f64) {
         let hour = hour_of(before);
         self.transaction(|s| {
@@ -253,6 +295,7 @@ impl Store {
             for table in ["usage", "coverage", "networks", "baselines", "dropped"] {
                 s.db.execute(&format!("DELETE FROM {table}"), []).ok();
             }
+            s.db.execute("DELETE FROM caps WHERE network_id IS NOT NULL", []).ok();
         });
         self.db.execute_batch("VACUUM").ok();
     }

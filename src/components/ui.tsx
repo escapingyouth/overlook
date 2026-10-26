@@ -11,7 +11,7 @@ export function Segmented<T extends string>({ value, options, onChange, size, la
   return (
     <div className={`seg ${size ?? ""}`} role="group" aria-label={label}>
       {options.map((o) => (
-        <button key={o.value} aria-pressed={o.value === value} title={o.title} onClick={() => onChange(o.value)}>
+        <button type="button" key={o.value} aria-pressed={o.value === value} title={o.title} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
@@ -19,8 +19,20 @@ export function Segmented<T extends string>({ value, options, onChange, size, la
   );
 }
 
+export function Setting({ title, desc, children }: { title: string; desc?: string; children: ReactNode }) {
+  return (
+    <div className="setting">
+      <div>
+        <div>{title}</div>
+        {desc && <div className="desc">{desc}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
 export function Toggle({ checked, onChange, label }: { checked: boolean; onChange: (v: boolean) => void; label: string }) {
-  return <button className="toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
+  return <button type="button" className="toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
 }
 
 export function Card({ title, subtitle, action, children, className }: { title?: string; subtitle?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }) {

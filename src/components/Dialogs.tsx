@@ -4,7 +4,8 @@ import { api, displayName, Network, Status, useLive } from "../lib/api";
 import { bytes } from "../lib/format";
 import { Appearance } from "../lib/theme";
 import { Icon, IconName } from "./Icon";
-import { Dialog, Segmented, Toggle } from "./ui";
+import { CapsPane } from "./Caps";
+import { Dialog, Segmented, Setting, Toggle } from "./ui";
 
 export function RenameDialog({ network, onClose }: { network: Network; onClose: () => void }) {
   const [name, setName] = useState(displayName(network));
@@ -77,6 +78,7 @@ export function Onboarding({ status, onDone }: { status: Status; onDone: () => v
 
 const TABS: { id: string; label: string; icon: IconName }[] = [
   { id: "general", label: "General", icon: "settings" },
+  { id: "caps", label: "Caps & alerts", icon: "alert" },
   { id: "appearance", label: "Appearance", icon: "paint" },
   { id: "data", label: "Data", icon: "database" },
   { id: "accuracy", label: "Accuracy", icon: "info" },
@@ -104,24 +106,13 @@ export function Settings({ status, initialTab, appearance, onAppearance, onClose
         </nav>
         <div className="settings-pane">
           {tab === "general" && <General status={status} />}
+          {tab === "caps" && <CapsPane status={status} />}
           {tab === "appearance" && <AppearancePane value={appearance} onChange={onAppearance} />}
           {tab === "data" && <DataPane status={status} />}
           {tab === "accuracy" && <Accuracy status={status} />}
         </div>
       </div>
     </Dialog>
-  );
-}
-
-function Setting({ title, desc, children }: { title: string; desc?: string; children: React.ReactNode }) {
-  return (
-    <div className="setting">
-      <div>
-        <div>{title}</div>
-        {desc && <div className="desc">{desc}</div>}
-      </div>
-      {children}
-    </div>
   );
 }
 

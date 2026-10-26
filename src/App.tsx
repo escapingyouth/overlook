@@ -70,7 +70,8 @@ export default function App() {
           ) : (
             <Dashboard key={`${network?.id}-${range}`} status={status} network={network} range={range} narrow={narrow}
               onSelect={setSelection} onRename={(n) => setOverlay({ kind: "rename", network: n })}
-              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })} />
+              onAccuracy={() => setOverlay({ kind: "settings", tab: "accuracy" })}
+              onCaps={() => setOverlay({ kind: "settings", tab: "caps" })} />
           )}
         </div>
       </main>

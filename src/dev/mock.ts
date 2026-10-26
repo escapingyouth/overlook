@@ -1,3 +1,4 @@
+import { emit } from "@tauri-apps/api/event";
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 import type { HourRow } from "../lib/analytics";
 
@@ -44,6 +45,13 @@ function usage(network: number | null, from: number, to: number) {
   return [...sum.values()].sort((a, b) => a.hour - b.hour);
 }
 
+let caps = [
+  { id: 1, networkId: 3, period: "month", reset: 1, limitBytes: 15e9, alerts: [80, 100], action: "block", throttleKbps: 1000 },
+  { id: 2, networkId: null, period: "month", reset: 12, limitBytes: 1.2e12, alerts: [80, 100], action: "none", throttleKbps: 1000 },
+  { id: 3, networkId: 1, period: "week", reset: 1, limitBytes: 20e9, alerts: [50, 80, 100], action: "throttle", throttleKbps: 1000 },
+];
+const sumUsed = (network: number | null, fromHour: number) => usage(network, fromHour, nowHour).reduce((s, r) => s + r.rx + r.tx, 0);
+
 const params = new URLSearchParams(location.search);
 mockWindows(location.hash === "#tray" ? "tray" : "main");
 mockIPC((cmd, args: any) => {
@@ -57,6 +65,8 @@ mockIPC((cmd, args: any) => {
         platform: params.get("platform") ?? "macos",
         sampleInterval: 30,
         retentionMonths: 24,
+        uploadAlerts: true,
+        canThrottle: params.get("platform") !== "windows",
       };
     case "usage":
       return { rows: usage(args.network, args.fromHour, args.toHour), coverage: coverage.filter(([h]) => h >= args.fromHour && h <= args.toHour) };
@@ -65,6 +75,25 @@ mockIPC((cmd, args: any) => {
         const list = usage(id, args.fromHour, args.toHour);
         return { networkId: id, rx: list.reduce((s, r) => s + r.rx, 0), tx: list.reduce((s, r) => s + r.tx, 0) };
       });
+    case "caps":
+      return caps.map((c) => {
+        const today = new Date(new Date().setHours(0, 0, 0, 0));
+        const start = c.period === "day" ? today
+          : c.period === "week" ? new Date(today.getFullYear(), today.getMonth(), today.getDate() - ((today.getDay() - c.reset + 7) % 7))
+          : new Date(today.getFullYear(), today.getMonth() - (today.getDate() < c.reset ? 1 : 0), c.reset);
+        const end = c.period === "day" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1)
+          : c.period === "week" ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 7)
+          : new Date(start.getFullYear(), start.getMonth() + 1, c.reset);
+        return { ...c, used: sumUsed(c.networkId, Math.floor(start.getTime() / HOUR)) + (c.id === 1 ? 15.6e9 : c.id === 3 ? 7e9 : 0), start: start.getTime() / 1000, end: end.getTime() / 1000 };
+      });
+    case "save_cap":
+      caps = args.cap.id ? caps.map((c) => (c.id === args.cap.id ? args.cap : c)) : [...caps, { ...args.cap, id: Date.now() }];
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "delete_cap":
+      caps = caps.filter((c) => c.id !== args.id);
+      setTimeout(() => emit("overlook://changed"));
+      return null;
     case "dropped_bytes":
       return 18_400_000;
     case "plugin:autostart|is_enabled":
@@ -72,4 +101,4 @@ mockIPC((cmd, args: any) => {
     default:
       return null;
   }
-});
+}, { shouldMockEvents: true });

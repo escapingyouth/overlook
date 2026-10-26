@@ -27,6 +27,8 @@ crates/overlook-core   Rust, no UI. Unit-tested.
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
   store.rs          SQLite (hourly buckets; same schema as earlier versions)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
+  caps.rs           data caps (day/week/month, per network or all), threshold + unusual-upload alerts
+  enforce.rs        when a cap runs out: disconnect Wi-Fi, or throttle via pf/dummynet (macOS) or tc (Linux)
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
 src                 React UI, custom components (no UI or chart library; Hugeicons for icons)
   lib/analytics.ts  ranges, calendar buckets, stats (runs in the UI so DST/week starts use the OS's rules)
@@ -54,6 +56,7 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
 - There's no per-app breakdown.
+- **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB.
 - Two different networks with the same SSID share one history.
 - Windows doesn't report whether Location access was granted, so if an SSID can't be read the network falls back to its router name.
 - Linux SSIDs need `iw` or NetworkManager installed.

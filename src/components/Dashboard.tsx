@@ -1,16 +1,17 @@
 import { createContext, useContext, useState } from "react";
 import { GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
-import { api, displayName, Network, Status, useLive, useReport } from "../lib/api";
+import { api, displayName, Network, Status, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
 import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
+import { CapsCard } from "./Caps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
 
-export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy }: {
+export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps }: {
   status: Status;
   network: Network | null;
   range: RangeId;
@@ -18,6 +19,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onSelect: (id: number) => void;
   onRename: (n: Network) => void;
   onAccuracy: () => void;
+  onCaps: () => void;
 }) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
@@ -38,6 +40,8 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
         <KpiCard icon="average" title="Daily average" value={report.dailyAverage} previous={null}
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
+
+      <CapsCard status={status} network={network} onManage={onCaps} />
 
       <div className="main-grid">
         <SplitDonut report={report} />
@@ -104,7 +108,8 @@ function PageHead({ status, network }: { status: Status; network: Network | null
   const active = network ? status.live.active.find((a) => a.networkId === network.id) : status.live.active.find((a) => a.networkId === status.live.primary);
   const current = status.networks.find((n) => n.id === status.live.primary);
   const live = network ? !!active : !!current;
-  const showRate = status.live.rate && (network ? status.live.primary === network.id : true);
+  const now = useRate(status.live.rate);
+  const showRate = now && (network ? status.live.primary === network.id : true);
   return (
     <div className="page-head">
       <div style={{ minWidth: 0 }}>
@@ -117,9 +122,9 @@ function PageHead({ status, network }: { status: Status; network: Network | null
         </div>
       </div>
       {showRate && (
-        <span className="rate num" title={`Average over the last ${status.sampleInterval} seconds`}>
-          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(status.live.rate![0])}</span>
-          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(status.live.rate![1])}</span>
+        <span className="rate num" title="Updated every second">
+          <span><Icon name="down" size={13} style={{ color: "var(--download)" }} />{rate(now![0])}</span>
+          <span><Icon name="up" size={13} style={{ color: "var(--upload)" }} />{rate(now![1])}</span>
         </span>
       )}
     </div>
@@ -156,7 +161,7 @@ function SplitDonut({ report }: { report: Report }) {
     <div className="result">
       <span className="icon-tile lg" style={{ color }}><Icon name={icon} size={18} /></span>
       <div style={{ minWidth: 0 }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "baseline", columnGap: 6 }}>
           <span className="num" style={{ fontWeight: 600, fontSize: 14, whiteSpace: "nowrap" }}>{bytes(value)}</span>
           <span className="faint num" style={{ fontSize: 12 }}>{report.total ? percent(value / report.total) : "—"}</span>
         </div>

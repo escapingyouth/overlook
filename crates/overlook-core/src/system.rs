@@ -8,6 +8,11 @@ pub struct Counter {
     pub tx: u64,
 }
 
+pub fn counter(name: &str) -> Option<Counter> {
+    let interfaces: Vec<_> = netdev::get_interfaces().into_iter().filter(|i| i.name == name).collect();
+    counters(&interfaces).remove(name)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WifiNameAccess {

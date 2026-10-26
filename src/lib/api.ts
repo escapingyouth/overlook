@@ -29,6 +29,26 @@ export interface Status {
   platform: "macos" | "windows" | "linux" | string;
   sampleInterval: number;
   retentionMonths: number;
+  uploadAlerts: boolean;
+  canThrottle: boolean;
+}
+
+export interface Cap {
+  id: number;
+  networkId: number | null;
+  period: "day" | "week" | "month";
+  /** Week: first weekday (0 = Sunday). Month: billing day (1–28). */
+  reset: number;
+  limitBytes: number;
+  alerts: number[];
+  action: "none" | "block" | "throttle";
+  throttleKbps: number;
+}
+
+export interface CapUsage extends Cap {
+  used: number;
+  start: number;
+  end: number;
 }
 
 export const displayName = (n: Network) => n.customName ?? n.name;
@@ -43,6 +63,10 @@ export const api = {
   deleteNetwork: (id: number) => invoke("delete_network", { id }),
   deleteAll: () => invoke("delete_all"),
   setRetention: (months: number) => invoke("set_retention", { months }),
+  caps: () => invoke<CapUsage[]>("caps"),
+  saveCap: (cap: Cap) => invoke("save_cap", { cap }),
+  deleteCap: (id: number) => invoke("delete_cap", { id }),
+  setUploadAlerts: (on: boolean) => invoke("set_upload_alerts", { on }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),
   saveExport: (fileName: string, contents: string) => invoke<string>("save_export", { fileName, contents }),
@@ -65,6 +89,18 @@ export function useLive<T>(load: () => Promise<T>, deps: unknown[]): T | undefin
   }, [run]);
   return value;
 }
+
+// Per-second rate pushed by the backend; falls back to the 30s sampled average until the first tick.
+export function useRate(fallback: [number, number] | null): [number, number] | null {
+  const [live, setLive] = useState<[number, number] | null>(null);
+  useEffect(() => {
+    const unlisten = listen<[number, number]>("overlook://rate", (e) => setLive(e.payload));
+    return () => void unlisten.then((f) => f());
+  }, []);
+  return fallback && (live ?? fallback);
+}
+
+export const useCaps = () => useLive(api.caps, []);
 
 export function useStatus() {
   return useLive(api.status, []);
