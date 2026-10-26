@@ -10,20 +10,35 @@ function AppIcon({ app }: Readonly<{ app: AppRow }>) {
   return <span className="icon-tile"><Icon name={app.system ? "computer" : "app"} size={14} /></span>;
 }
 
-export function TopApps({ network, range, status, onEnable }: Readonly<{ network: number | null; range: RangeId; status: Status; onEnable: () => void }>) {
+/** A chart bucket the user picked: the table then explains that period instead of the whole range. */
+export interface PickedSpan {
+  hours: [number, number];
+  title: string;
+}
+
+export function TopApps({ network, range, status, onEnable, span, onClear }: Readonly<{
+  network: number | null;
+  range: RangeId;
+  status: Status;
+  onEnable: () => void;
+  span?: PickedSpan | null;
+  onClear?: () => void;
+}>) {
   const { enabled, error } = status.live.perApp;
-  const report = useApps(network, range);
+  const report = useApps(network, range, span?.hours);
   const [all, setAll] = useState(false);
   const info = rangeInfo(range);
+  const title = span?.title ?? info.title;
+  const startHour = span?.hours[0] ?? hourOf(rangeInterval(range, new Date()).start.getTime());
 
-  let sub = info.title;
+  let sub = title;
   let body: React.ReactNode;
   let note: string | null = null;
 
   if (!enabled) {
     body = (
       <div className="panel-empty">
-        <span className="muted">See which apps use your data. Overlook only counts bytes per app, never what they send.</span>
+        <span className="muted">{span ? "Turn on per-app tracking to see which apps cause spikes like this one." : "See which apps use your data."} Overlook only counts bytes per app, never what they send.</span>
         <button className="btn" onClick={onEnable}>Turn on per-app tracking</button>
       </div>
     );
@@ -39,11 +54,12 @@ export function TopApps({ network, range, status, onEnable }: Readonly<{ network
   } else {
     const { rows, hidden, total, count } = topApps(report);
     if (count === 0) {
-      body = <div className="panel-empty muted">No app traffic recorded in this range yet.</div>;
+      const before = span && report.sinceHour !== null && span.hours[1] < report.sinceHour;
+      body = <div className="panel-empty muted">{before ? "Per-app tracking wasn't on yet in this period." : `No app traffic recorded in this ${span ? "period" : "range"} yet.`}</div>;
     } else {
-      sub = `${bytes(total)} across ${count} apps · ${info.title}`;
+      sub = `${bytes(total)} across ${count} apps · ${title}`;
       const shown = all ? [...rows, ...hidden] : rows;
-      if (report.sinceHour !== null && report.sinceHour > hourOf(rangeInterval(range, new Date()).start.getTime()))
+      if (report.sinceHour !== null && report.sinceHour > startHour)
         note = `Per-app data since ${fmtDate(new Date(report.sinceHour * 3_600_000), { month: "short", day: "numeric" })}`;
       body = (
         <div style={{ overflowX: "auto" }}>
@@ -86,8 +102,12 @@ export function TopApps({ network, range, status, onEnable }: Readonly<{ network
   }
 
   return (
-    <section className="panel">
-      <div className="panel-head"><h2>Top apps</h2><span className="faint" style={{ fontSize: 12 }}>{sub}</span></div>
+    <section className={`panel ${span ? "picked" : ""}`} id="top-apps">
+      <div className="panel-head">
+        <h2>{span ? "What used data" : "Top apps"}</h2>
+        <span className="faint" style={{ fontSize: 12, minWidth: 0, flex: 1 }} aria-live="polite">{sub}</span>
+        {span && onClear && <button className="btn ghost" onClick={onClear}><Icon name="close" size={13} />Whole range</button>}
+      </div>
       {body}
       {note && <div className="panel-note">{note}</div>}
     </section>

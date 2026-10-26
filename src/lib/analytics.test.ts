@@ -1,7 +1,7 @@
 process.env.TZ = "America/New_York";
 
 import { describe, expect, it } from "vitest";
-import { buildReport, bucketTotal, capForecast, HourRow, hourOf, rangeInterval, RangeId, startOf } from "./analytics";
+import { buildReport, bucketHours, bucketTotal, capForecast, HourRow, hourOf, rangeInterval, RangeId, startOf } from "./analytics";
 import { bytes, niceTicks } from "./format";
 
 const d = (s: string) => new Date(s);
@@ -116,5 +116,22 @@ describe("cap forecast", () => {
   it("stays quiet early in the period and once the cap is used up", () => {
     expect(capForecast({ ...cap, used: 5 }, 50).projected).toBeNull();
     expect(capForecast({ ...cap, used: 120 }, 900).runsOutAt).toBeNull();
+  });
+});
+
+describe("bucketHours", () => {
+  it("covers every hour of a picked bucket, including a partial last one", () => {
+    const now = d("2026-10-26T15:20:00");
+    const r = report("week", now, [], [], null, "day");
+    const today = r.buckets[r.buckets.length - 1];
+    expect(bucketHours(today)).toEqual([hourOf(d("2026-10-26T00:00:00").getTime()), hourOf(d("2026-10-26T15:00:00").getTime())]);
+    const hourly = report("day", now).buckets[0];
+    expect(bucketHours(hourly)).toEqual([hourOf(hourly.start.getTime()), hourOf(hourly.start.getTime())]);
+  });
+
+  it("spans a DST fall-back day's 25 hours", () => {
+    const r = report("week", d("2026-11-03T12:00:00"), [], [], null, "day");
+    const [from, to] = bucketHours(r.buckets.find((b) => b.start.getDate() === 1)!);
+    expect(to - from + 1).toBe(25);
   });
 });

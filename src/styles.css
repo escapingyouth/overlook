@@ -412,3 +412,9 @@ body.tray-body { background: transparent; }
 .panel-empty { padding: 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 12.5px; }
 .table button.more { all: unset; cursor: pointer; display: inline-flex; align-items: center; gap: 8px; color: var(--text-2); }
 .table button.more:hover { color: var(--text); }
+
+/* Trend drill-down: a picked bucket stays marked and Top apps explains it. */
+.chart.pickable svg { cursor: pointer; }
+.chart.pickable:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 8px; }
+.chart .pick-band { fill: color-mix(in srgb, var(--accent) 14%, transparent); stroke: color-mix(in srgb, var(--accent) 40%, transparent); }
+.panel.picked { border-color: color-mix(in srgb, var(--accent) 45%, transparent); }

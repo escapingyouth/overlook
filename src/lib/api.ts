@@ -139,9 +139,12 @@ export function useReport(network: number | null, range: RangeId, granularity: G
   }, [network, range, granularity, historyStartHour]);
 }
 
-export function useApps(network: number | null, range: RangeId) {
+/** Apps for the range, or for an explicit inclusive hour span (a picked chart bucket). */
+export function useApps(network: number | null, range: RangeId, span?: [number, number] | null) {
+  const [from, to] = span ?? [];
   return useLive<AppsReport>(() => {
     const now = new Date();
+    if (from !== undefined && to !== undefined) return api.apps(network, from, to);
     return api.apps(network, hourOf(rangeInterval(range, now).start.getTime()), hourOf(now.getTime()) + 1);
-  }, [network, range]);
+  }, [network, range, from, to]);
 }

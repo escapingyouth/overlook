@@ -2,6 +2,7 @@ import { HugeiconsIcon } from "@hugeicons/react";
 import {
   Alert02Icon,
   ArrowLeft01Icon,
+  Cancel01Icon,
   BinocularsIcon,
   DashboardSpeed01Icon,
   Notification03Icon,
@@ -79,6 +80,7 @@ const icons = {
   back: ArrowLeft01Icon,
   app: CubeIcon,
   computer: ComputerIcon,
+  close: Cancel01Icon,
 } as const;
 
 export type IconName = keyof typeof icons;

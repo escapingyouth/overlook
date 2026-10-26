@@ -1,5 +1,5 @@
 import { createContext, useContext, useState } from "react";
-import { GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
+import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
 import { api, displayName, Network, Status, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
 import { Icon, IconName, kindIcon } from "./Icon";
@@ -7,7 +7,7 @@ import { Bytes, Card, Segmented } from "./ui";
 import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./UsageChart";
 import { Donut } from "./Spark";
 import { CapsCard } from "./Caps";
-import { TopApps } from "./TopApps";
+import { PickedSpan, TopApps } from "./TopApps";
 
 const ReportContext = createContext<Report | null>(null);
 const useReportContext = () => useContext(ReportContext)!;
@@ -24,11 +24,20 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   onEnablePerApp: () => void;
 }>) {
   const [granularity, setGranularity] = useState<Partial<Record<RangeId, Granularity>>>({});
+  // Keyed by start time, not index, so the pick survives the 24-hour window sliding on refresh.
+  const [pickedAt, setPickedAt] = useState<number | null>(null);
   const [show, setShow] = useState<SeriesVisibility>({ download: true, upload: true });
   const [pattern, setPattern] = useState<"hour" | "weekday">("hour");
   const report = useReport(network?.id ?? null, range, granularity[range], status.firstCoveredHour);
   if (!report) return null;
   const info = rangeInfo(range);
+  const pickedIndex = report.buckets.findIndex((b) => b.start.getTime() === pickedAt);
+  const picked = pickedIndex >= 0 ? report.buckets[pickedIndex] : null;
+  const span: PickedSpan | null = picked && { hours: bucketHours(picked), title: bucketTitle(picked, report.granularity) };
+  const pick = (i: number | null) => {
+    setPickedAt(i === null ? null : report.buckets[i].start.getTime());
+    if (i !== null) requestAnimationFrame(() => document.getElementById("top-apps")?.scrollIntoView({ block: "nearest" }));
+  };
 
   return (
     <ReportContext.Provider value={report}>
@@ -56,7 +65,10 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </div>
             </div>
             {info.granularities.length > 1 && (
-              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => setGranularity({ ...granularity, [range]: g })}
+              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => {
+                  setGranularity({ ...granularity, [range]: g });
+                  setPickedAt(null);
+                }}
                 options={info.granularities.map((g) => ({ value: g, label: GRANULARITY_LABEL[g] }))} />
             )}
           </div>
@@ -68,13 +80,16 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </button>
             ))}
           </div>
-          <TrendChart report={report} show={show} height={narrow ? 240 : 290} />
+          <TrendChart report={report} show={show} height={narrow ? 240 : 290} picked={picked ? pickedIndex : null} onPick={pick} />
         </section>
       </div>
 
-      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp} />
+      <TopApps network={network?.id ?? null} range={range} status={status} onEnable={onEnablePerApp}
+        span={span} onClear={() => setPickedAt(null)} />
 
-      {network ? <DaysTable report={report} /> : <NetworksTable status={status} report={report} onSelect={onSelect} />}
+      {network ? <DaysTable report={report} /> : (
+        <NetworksTable status={status} report={report} onSelect={onSelect} span={span} />
+      )}
 
       <div className={`row ${network ? "three" : ""}`}>
         {range !== "day" && (
@@ -199,8 +214,9 @@ function SplitDonut({ report }: Readonly<{ report: Report }>) {
   );
 }
 
-function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void }>) {
-  const totals = useLive(() => api.totals(hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1), [report.start.getTime()]) ?? [];
+function NetworksTable({ status, report, onSelect, span }: Readonly<{ status: Status; report: Report; onSelect: (id: number) => void; span: PickedSpan | null }>) {
+  const [from, to] = span?.hours ?? [hourOf(report.start.getTime()), hourOf(report.end.getTime()) + 1];
+  const totals = useLive(() => api.totals(from, to), [from, to]) ?? [];
   const rows = status.networks
     .map((n) => {
       const t = totals.find((t) => t.networkId === n.id);
@@ -209,7 +225,7 @@ function NetworksTable({ status, report, onSelect }: Readonly<{ status: Status; 
     .sort((a, b) => b.rx + b.tx - (a.rx + a.tx));
   return (
     <section className="panel">
-      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{rangeInfo(report.range).title}</span></div>
+      <div className="panel-head"><h2>Networks</h2><span className="faint" style={{ fontSize: 12 }}>{span?.title ?? rangeInfo(report.range).title}</span></div>
       <div style={{ overflowX: "auto" }}>
         <table className="table">
           <thead>
