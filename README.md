@@ -11,9 +11,13 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, storage (24 tests)
-npm test                              # ranges, buckets, statistics (12 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, storage (39 tests)
+cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
+cargo test --workspace                   # everything, including the shell (50 tests)
+npm test                              # ranges, buckets, statistics, per-app (18 tests)
 ```
+
+On Linux and Windows the per-app helper sidecar is built by `node scripts/build-helper.mjs`. `npm run tauri dev` and `npm run tauri build` run it automatically; run it by hand before a bare `cargo build -p overlook`.
 
 Build each OS's installer on that OS (or in CI with a matrix). The core crate type-checks for all three targets from any host:
 `cargo check -p overlook-core --no-default-features --target x86_64-pc-windows-msvc`.
@@ -25,12 +29,15 @@ Visual QA without Tauri: run `npm run dev` and open `http://localhost:1420/?plat
 crates/overlook-core   Rust, no UI. Unit-tested.
   system.rs         per-OS counters, boot time, physical-adapter filter, router MAC, Wi-Fi names, permission
   processor.rs      pure delta + attribution logic (resets, gaps, switches)
+  apps.rs           per-app snapshot parsing, app keys, delta tracking
   store.rs          SQLite (hourly buckets; same schema as earlier versions)
   lib.rs            Collector: fingerprint networks, sample, persist, live rate
+crates/overlook-helper  Windows (ETW) / Linux (sock_diag) per-app sidecar, run as a service
 src-tauri           shell: commands, 5 s collector thread, tray + popover, autostart, close-to-tray, migration
 src                 React UI, custom components (no UI or chart library; Hugeicons for icons)
   lib/analytics.ts  ranges, calendar buckets, stats (runs in the UI so DST/week starts use the OS's rules)
-  components/       Dashboard, UsageChart (SVG), Dialogs/Settings, ui primitives, Icon (Hugeicons)
+  lib/apps.ts       per-app shares and grouping for the Top apps table
+  components/       Dashboard, UsageChart (SVG), Dialogs/Settings, TopApps, ui primitives, Icon (Hugeicons)
   Tray.tsx          tray popover
 ```
 
@@ -42,6 +49,7 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 | Router MAC | configd `ARPResolvedHardwareAddress` | IP Helper `SendARP` (via netdev) | netdev gateway, else `/proc/net/arp` |
 | Wi-Fi name | CoreWLAN (needs Location) | `netsh wlan` (Win 11 needs Location) | `iw` or `nmcli` |
 | Boot time | `kern.boottime` | `GetTickCount64` | `/proc/stat btime` |
+| Per-app bytes | `nettop` | ETW kernel network events via a helper service (experimental) | `sock_diag` TCP via a root helper (experimental) |
 
 - **Identity.** A network's key is `wifi:<SSID>` or `router:<MAC>`, never the adapter name alone. If a network later gains or loses its SSID, it keeps one history, matched by router MAC.
 - **Sampling.** The collector checks network identity every 5 s and records a sample every 30 s, or immediately when the identity changes. That keeps any ambiguity around a network switch to a few seconds.
@@ -53,11 +61,14 @@ src                 React UI, custom components (no UI or chart library; Hugeico
 ### Limitations
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
-- There's no per-app breakdown.
+- Per-app tracking is opt-in and only counts from when it's turned on.
+- On Linux, per-app counts TCP only (UDP/QUIC lands in System) and misses very short-lived connections.
+- Processes that start and exit between samples are missed.
+- macOS apps whose icon lives only in an asset catalog get a generic icon.
 - Two different networks with the same SSID share one history.
 - Windows doesn't report whether Location access was granted, so if an SSID can't be read the network falls back to its router name.
 - Linux SSIDs need `iw` or NetworkManager installed.
-- **Verification:** the Windows and Linux paths compile and are covered by parser unit tests, but they haven't been run on those operating systems.
+- **Verification:** the Windows and Linux paths compile and are covered by parser unit tests, but they haven't been run on those operating systems. That includes the per-app helpers, which are experimental.
 
 ## Design
 - **Dark mode** is its own palette, not an inversion:
