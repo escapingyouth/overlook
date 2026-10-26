@@ -31,6 +31,7 @@ export interface Status {
   sampleInterval: number;
   retentionMonths: number;
   uploadAlerts: boolean;
+  weeklySummary: boolean;
   canThrottle: boolean;
   trayRate: boolean;
 }
@@ -91,6 +92,7 @@ export const api = {
   saveCap: (cap: Cap) => invoke("save_cap", { cap }),
   deleteCap: (id: number) => invoke("delete_cap", { id }),
   setUploadAlerts: (on: boolean) => invoke("set_upload_alerts", { on }),
+  setWeeklySummary: (on: boolean) => invoke("set_weekly_summary", { on }),
   setTrayRate: (on: boolean) => invoke("set_tray_rate", { on }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),

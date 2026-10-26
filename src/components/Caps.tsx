@@ -185,6 +185,9 @@ export function CapsPane({ status, newCapFor }: Readonly<{ status: Status; newCa
       <Setting title="Unusual usage alerts" desc={`Notifies you when an hour's upload is far above normal for that network, such as an unexpected backup or sync${status.live.perApp.enabled ? ", or when one app uses far more than it usually does" : ""}.`}>
         <Toggle label="Unusual usage alerts" checked={status.uploadAlerts} onChange={(v) => api.setUploadAlerts(v)} />
       </Setting>
+      <Setting title="Weekly summary" desc={`A notification on Monday with last week's total, how it compares with the week before, and the network${status.live.perApp.enabled ? " and app" : ""} that used the most.`}>
+        <Toggle label="Weekly summary" checked={status.weeklySummary} onChange={(v) => api.setWeeklySummary(v)} />
+      </Setting>
     </>
   );
 }

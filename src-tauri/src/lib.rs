@@ -34,6 +34,7 @@ struct Status {
     sample_interval: f64,
     retention_months: i64,
     upload_alerts: bool,
+    weekly_summary: bool,
     can_throttle: bool,
     tray_rate: bool,
 }
@@ -60,6 +61,7 @@ fn status(state: State<AppState>) -> Status {
         sample_interval: SAMPLE_INTERVAL,
         retention_months: retention(&c.store),
         upload_alerts: c.store.meta("upload_alerts").as_deref() != Some("0"),
+        weekly_summary: c.store.meta("weekly_summary").as_deref() != Some("0"),
         can_throttle: enforce::CAN_THROTTLE,
         tray_rate: state.tray_rate.load(Ordering::Relaxed),
     }
@@ -156,6 +158,12 @@ fn delete_cap(app: AppHandle, state: State<AppState>, id: i64) {
 #[tauri::command]
 fn set_upload_alerts(app: AppHandle, state: State<AppState>, on: bool) {
     state.collector.lock().unwrap().store.set_meta("upload_alerts", if on { "1" } else { "0" });
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
+fn set_weekly_summary(app: AppHandle, state: State<AppState>, on: bool) {
+    state.collector.lock().unwrap().store.set_meta("weekly_summary", if on { "1" } else { "0" });
     app.emit("overlook://changed", ()).ok();
 }
 
@@ -385,7 +393,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, usage, totals, apps, set_per_app, delete_app_data, dropped_bytes, rename_network, delete_network, delete_all,
-            set_retention, caps, save_cap, delete_cap, set_upload_alerts, set_tray_rate, request_wifi_names, reveal_data, save_export, show_main, quit
+            set_retention, caps, save_cap, delete_cap, set_upload_alerts, set_weekly_summary, set_tray_rate, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Overlook");

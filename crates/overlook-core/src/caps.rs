@@ -160,6 +160,10 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
         }
     }
 
+    if store.meta("weekly_summary").as_deref() != Some("0") {
+        v.notices.extend(weekly_summary(store, &Local, now));
+    }
+
     if store.meta("upload_alerts").as_deref() != Some("0") {
         let h = hour_of(now);
         let mut ids: Vec<i64> = active.iter().map(|a| a.network_id).collect();
@@ -179,6 +183,43 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
         }
     }
     v
+}
+
+/// Last week in one notification, from 09:00 on Monday (or whenever Overlook next runs that week).
+// ponytail: weeks start Monday for everyone; pass the UI's locale week start if Sunday-first users ask.
+fn weekly_summary<Tz: TimeZone>(store: &Store, tz: &Tz, now: f64) -> Option<Notice> {
+    let (this_week, _) = period_bounds(tz, "week", 1, now);
+    let (last_week, _) = period_bounds(tz, "week", 1, this_week - 1.0);
+    let (week_before, _) = period_bounds(tz, "week", 1, last_week - 1.0);
+    if now < this_week + 9.0 * 3600.0 {
+        return None;
+    }
+    let (from, to) = (hour_of(last_week), hour_of(this_week) - 1);
+    let sum = |from, to| store.hours(None, from, to).iter().map(|r| r.rx + r.tx).sum::<i64>();
+    let total = sum(from, to);
+    if total == 0 || !store.mark_once(&format!("summary:{}", last_week as i64)) {
+        return None;
+    }
+
+    let mut parts = vec![];
+    let previous = sum(hour_of(week_before), from - 1);
+    if previous > 0 && !store.coverage(hour_of(week_before), from - 1).is_empty() {
+        let change = (total - previous) as f64 / previous as f64;
+        parts.push(match change {
+            c if c.abs() < 0.05 => "About the same as the week before.".to_string(),
+            c => format!("{} {:.0}% on the week before.", if c > 0.0 { "Up" } else { "Down" }, c.abs() * 100.0),
+        });
+    }
+    let names: HashMap<i64, String> = store.networks().into_iter().map(|n| (n.id, n.custom_name.unwrap_or(n.name))).collect();
+    let used: Vec<_> = store.totals_by_network(from, to).into_iter().filter(|t| t.rx + t.tx > 0).collect();
+    if let Some(top) = used.iter().max_by_key(|t| t.rx + t.tx) {
+        let name = names.get(&top.network_id).map_or("one network", String::as_str);
+        parts.push(if used.len() == 1 { format!("All on {name}.") } else { format!("Most on {name} ({}).", gb(top.rx + top.tx)) });
+    }
+    if let Some(app) = store.apps_report(None, from, to).apps.into_iter().find(|a| a.key != SYSTEM_KEY && a.rx + a.tx > 0) {
+        parts.push(format!("Top app: {} ({}).", app.name, gb(app.rx + app.tx)));
+    }
+    Some(Notice { title: format!("Last week: {} used", gb(total)), body: parts.join(" ") })
 }
 
 /// An app using far more this hour than its typical hour on this network (or a lot, for an app new here).
@@ -344,12 +385,45 @@ mod tests {
         assert!(evaluate(&s, &active, at(h)).notices.is_empty());
     }
 
+    #[test] fn weekly_summary_compares_weeks_and_names_where_it_went() {
+        let s = Store::open(":memory:").unwrap();
+        let day = |d: u32, h: u32| Utc.with_ymd_and_hms(2026, 10, d, h, 0, 0).unwrap().timestamp() as f64;
+        let net = |key, name| NetworkInput { key, name, kind: "wifi", ssid: Some(name), router_mac: None, interface: "en0" };
+        let home = s.resolve_network(&net("wifi:Home", "Home"), day(12, 8)).unwrap();
+        let cafe = s.resolve_network(&net("wifi:Cafe", "Cafe"), day(12, 8)).unwrap();
+        let steam = s.insert_app("/Applications/Steam.app", "Steam", None);
+        // 2026-10-19 and 10-26 are Mondays: the week before is Oct 12–18, last week Oct 19–25.
+        s.add_coverage(day(14, 10), day(14, 11));
+        s.add(&UsageDelta { network_id: home, rx: 20_000_000_000, tx: 0, estimated: false, at: day(14, 10) });
+        s.add(&UsageDelta { network_id: home, rx: 18_000_000_000, tx: 1_000_000_000, estimated: false, at: day(21, 10) });
+        s.add(&UsageDelta { network_id: cafe, rx: 4_000_000_000, tx: 0, estimated: false, at: day(25, 15) });
+        s.add_app_usage(home, steam, day(21, 10), 9_000_000_000, 0);
+
+        assert_eq!(weekly_summary(&s, &Utc, day(26, 8)), None, "waits for 09:00");
+        let n = weekly_summary(&s, &Utc, day(26, 9)).unwrap();
+        assert_eq!(n.title, "Last week: 23 GB used");
+        assert_eq!(n.body, "Up 15% on the week before. Most on Home (19 GB). Top app: Steam (9.0 GB).");
+        assert_eq!(weekly_summary(&s, &Utc, day(27, 9)), None, "once a week");
+    }
+
+    #[test] fn weekly_summary_skips_an_empty_week_and_untracked_comparisons() {
+        let s = Store::open(":memory:").unwrap();
+        let day = |d: u32, h: u32| Utc.with_ymd_and_hms(2026, 10, d, h, 0, 0).unwrap().timestamp() as f64;
+        assert_eq!(weekly_summary(&s, &Utc, day(26, 12)), None);
+        let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
+        let id = s.resolve_network(&net, day(28, 12)).unwrap();
+        s.add(&UsageDelta { network_id: id, rx: 2_000_000_000, tx: 0, estimated: false, at: day(28, 12) });
+        let n = weekly_summary(&s, &Utc, Utc.with_ymd_and_hms(2026, 11, 2, 10, 0, 0).unwrap().timestamp() as f64).unwrap();
+        assert_eq!(n.body, "All on Home.");
+    }
+
     #[test] fn unusual_upload_alerts_once_per_hour() {
         let s = Store::open(":memory:").unwrap();
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
         let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
+        s.set_meta("weekly_summary", "0"); // the 48 h of history can fall in last week, depending on today's date
         for h in 1..48 {
             s.add(&UsageDelta { network_id: id, rx: 0, tx: 20_000_000, estimated: false, at: now - h as f64 * 3600.0 });
         }
