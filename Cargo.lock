@@ -2794,6 +2794,7 @@ dependencies = [
  "serde",
  "serde_json",
  "system-configuration",
+ "windows 0.62.2",
 ]
 
 [[package]]

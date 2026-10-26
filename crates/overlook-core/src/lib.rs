@@ -26,6 +26,7 @@ pub struct Fingerprint {
     pub kind: String,
     pub ssid: Option<String>,
     pub router_mac: Option<String>,
+    pub hotspot: bool,
 }
 
 impl Fingerprint {
@@ -52,6 +53,8 @@ pub struct ActiveNetwork {
     pub network_id: i64,
     pub interface: String,
     pub kind: String,
+    /// Tethered to a phone, so probably metered.
+    pub hotspot: bool,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -105,6 +108,7 @@ pub struct Collector {
     pub store: Store,
     processor: Processor,
     ssid_cache: HashMap<String, (Option<String>, Instant)>,
+    metered_cache: HashMap<String, (bool, Instant)>,
     mac_cache: HashMap<String, String>,
     pub status: LiveStatus,
     pub per_app: bool,
@@ -122,6 +126,7 @@ impl Collector {
             store,
             processor: Processor { sample_interval: SAMPLE_INTERVAL },
             ssid_cache: HashMap::new(),
+            metered_cache: HashMap::new(),
             mac_cache: HashMap::new(),
             status: LiveStatus::default(),
             last_keys: vec![],
@@ -152,7 +157,8 @@ impl Collector {
                 let router_mac = system::normalize_mac(&gateway.mac_addr.to_string()).or_else(|| self.cached_mac(&ip, &i.name));
                 let wifi = system::is_wifi(i);
                 let ssid = if wifi { self.cached_ssid(i, router_mac.as_deref()) } else { None };
-                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac })
+                let hotspot = self.cached_metered(i, router_mac.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
+                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot })
             })
             .collect()
     }
@@ -165,6 +171,19 @@ impl Collector {
         let mac = system::neighbor_mac(ip, interface)?;
         self.mac_cache.insert(key, mac.clone());
         Some(mac)
+    }
+
+    /// Keyed by router too, so joining another network re-checks at once.
+    fn cached_metered(&mut self, i: &netdev::Interface, router: Option<&str>) -> bool {
+        let key = format!("{}|{}", i.name, router.unwrap_or(""));
+        match self.metered_cache.get(&key) {
+            Some(&(m, at)) if at.elapsed() < Duration::from_secs(120) => m,
+            _ => {
+                let m = system::metered(i);
+                self.metered_cache.insert(key, (m, Instant::now()));
+                m
+            }
+        }
     }
 
     fn cached_ssid(&mut self, i: &netdev::Interface, router: Option<&str>) -> Option<String> {
@@ -195,7 +214,7 @@ impl Collector {
                 let name = fp.default_name();
                 let input = NetworkInput { key: &key, name: &name, kind: &fp.kind, ssid: fp.ssid.as_deref(), router_mac: fp.router_mac.as_deref(), interface: &fp.interface };
                 if let Ok(id) = store.resolve_network(&input, now) {
-                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone() });
+                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot });
                 }
             }
             let primary = status.active.iter().find(|a| Some(&a.interface) == primary_iface.as_ref()).or(status.active.first()).cloned();
@@ -275,14 +294,14 @@ mod tests {
     }
 
     #[test] fn fingerprint_never_keys_on_interface_alone() {
-        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None };
+        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false };
         assert_eq!(fp.key(), None);
         let fp = Fingerprint { ssid: Some("Home".into()), router_mac: Some("aa:bb:cc:dd:ee:ff".into()), ..fp };
         assert_eq!(fp.key().as_deref(), Some("wifi:Home"));
     }
 
     #[test] fn default_name_uses_router_suffix() {
-        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()) };
+        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false };
         assert_eq!(fp.default_name(), "Ethernet Network · EE:FF");
     }
 

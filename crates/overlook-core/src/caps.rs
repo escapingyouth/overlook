@@ -146,6 +146,17 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
         }
     }
 
+    // One nudge per hotspot, and only while nothing caps it specifically: phone plans run out fast.
+    let capped: Vec<i64> = store.caps().iter().filter(|c| c.app_id.is_none()).filter_map(|c| c.network_id).collect();
+    for a in active.iter().filter(|a| a.hotspot && !capped.contains(&a.network_id)) {
+        if store.mark_once(&format!("hotspot:{}", a.network_id)) {
+            v.notices.push(Notice {
+                title: format!("{} looks like a phone hotspot", name(Some(a.network_id))),
+                body: "Overlook is counting its data separately. Open Overlook to set a cap and get alerts before your plan runs out.".into(),
+            });
+        }
+    }
+
     if store.meta("upload_alerts").as_deref() != Some("0") {
         let h = hour_of(now);
         let mut ids: Vec<i64> = active.iter().map(|a| a.network_id).collect();
@@ -193,7 +204,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         s.add(&UsageDelta { network_id: id, rx: 850_000_000, tx: 0, estimated: false, at: now });
         s.save_cap(&Cap { id: 0, network_id: Some(id), period: "day".into(), reset: 0, limit_bytes: 1_000_000_000, alerts: vec![80, 100], action: "block".into(), throttle_kbps: 1000, app_id: None });
 
@@ -214,7 +225,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         let dropbox = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
         let other = s.insert_app("/Applications/Safari.app", "Safari", None);
         s.add(&UsageDelta { network_id: id, rx: 3_000_000_000, tx: 0, estimated: false, at: now });
@@ -247,7 +258,7 @@ mod tests {
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Hotspot", name: "Hotspot", kind: "wifi", ssid: Some("Hotspot"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         let app = s.insert_app("/Applications/Dropbox.app", "Dropbox", None);
         s.add_app_usage(id, app, now, 900, 0);
         let cap = Cap { id: 0, network_id: None, period: "day".into(), reset: 0, limit_bytes: 1000, alerts: vec![80], action: "none".into(), throttle_kbps: 1000, app_id: Some(app) };
@@ -262,12 +273,27 @@ mod tests {
         assert_eq!(evaluate(&s, &active, now).notices.len(), 1);
     }
 
+    #[test] fn hotspots_without_a_cap_nudge_once() {
+        let s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = |key, name| NetworkInput { key, name, kind: "wifi", ssid: Some(name), router_mac: None, interface: "en0" };
+        let phone = s.resolve_network(&net("wifi:Sam’s iPhone", "Sam’s iPhone"), now).unwrap();
+        let capped = s.resolve_network(&net("wifi:Pixel", "Pixel"), now).unwrap();
+        s.save_cap(&Cap { id: 0, network_id: Some(capped), period: "month".into(), reset: 1, limit_bytes: 1_000_000_000, alerts: vec![], action: "none".into(), throttle_kbps: 1000, app_id: None });
+        let active = |id| ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: true };
+
+        let v = evaluate(&s, &[active(phone), active(capped)], now);
+        assert_eq!(v.notices.len(), 1);
+        assert_eq!(v.notices[0].title, "Sam’s iPhone looks like a phone hotspot");
+        assert!(evaluate(&s, &[active(phone)], now).notices.is_empty());
+    }
+
     #[test] fn unusual_upload_alerts_once_per_hour() {
         let s = Store::open(":memory:").unwrap();
         let now = crate::now();
         let net = NetworkInput { key: "wifi:Home", name: "Home", kind: "wifi", ssid: Some("Home"), router_mac: None, interface: "en0" };
         let id = s.resolve_network(&net, now).unwrap();
-        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into() }];
+        let active = vec![ActiveNetwork { network_id: id, interface: "en0".into(), kind: "wifi".into(), hotspot: false }];
         for h in 1..48 {
             s.add(&UsageDelta { network_id: id, rx: 0, tx: 20_000_000, estimated: false, at: now - h as f64 * 3600.0 });
         }
