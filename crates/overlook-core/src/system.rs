@@ -252,6 +252,116 @@ pub fn request_wifi_names() {
 #[cfg(target_os = "linux")]
 pub fn request_wifi_names() {}
 
+#[cfg(target_os = "linux")]
+pub const SNAPSHOT_PATH: &str = "/run/overlook-helper/counters.json";
+#[cfg(target_os = "windows")]
+pub const SNAPSHOT_PATH: &str = r"C:\ProgramData\Overlook\counters.json";
+
+#[cfg(target_os = "macos")]
+pub fn process_snapshot() -> Result<crate::apps::Snapshot, String> {
+    use crate::apps::{parse_nettop, ProcSample, Snapshot};
+    let out = Command::new("nettop").args(["-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"]).output().map_err(|e| format!("nettop failed: {e}"))?;
+    if !out.status.success() {
+        return Err("nettop failed".into());
+    }
+    let procs = parse_nettop(&String::from_utf8_lossy(&out.stdout)).into_iter().map(|(pid, rx, tx)| ProcSample { pid, path: pid_path(pid), rx, tx }).collect();
+    Ok(Snapshot { session: format!("nettop-{}", boot_time()), at: crate::now(), procs })
+}
+
+#[cfg(target_os = "macos")]
+fn pid_path(pid: u32) -> String {
+    let mut buf = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
+    let n = unsafe { libc::proc_pidpath(pid as i32, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if n <= 0 { String::new() } else { String::from_utf8_lossy(&buf[..n as usize]).into_owned() }
+}
+
+// Untested on this platform: written without a Windows/Linux machine to run on.
+#[cfg(not(target_os = "macos"))]
+pub fn process_snapshot() -> Result<crate::apps::Snapshot, String> {
+    const MISSING: &str = "Per-app helper isn't running";
+    let snap: crate::apps::Snapshot = std::fs::read_to_string(SNAPSHOT_PATH).ok().and_then(|s| serde_json::from_str(&s).ok()).ok_or(MISSING)?;
+    if crate::now() - snap.at > 60.0 { Err(MISSING.into()) } else { Ok(snap) }
+}
+
+#[cfg(target_os = "macos")]
+pub fn describe_app(key: &str) -> (String, Option<String>) {
+    (crate::apps::default_name(key), mac_icon(key))
+}
+
+// ponytail: apps with only an asset-catalog icon get the generic icon; upgrade to NSWorkspace iconForFile
+#[cfg(target_os = "macos")]
+fn mac_icon(key: &str) -> Option<String> {
+    use base64::Engine;
+    let plist = format!("{key}/Contents/Info.plist");
+    let out = Command::new("plutil").args(["-extract", "CFBundleIconFile", "raw", &plist]).output().ok().filter(|o| o.status.success())?;
+    let mut file = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if file.is_empty() {
+        return None;
+    }
+    if !file.ends_with(".icns") {
+        file.push_str(".icns");
+    }
+    let tmp = std::env::temp_dir().join(format!("overlook-icon-{}.png", std::process::id()));
+    let ok = Command::new("sips").arg("-s").args(["format", "png", "-Z", "64"]).arg(format!("{key}/Contents/Resources/{file}")).arg("--out").arg(&tmp).output().ok()?.status.success();
+    let png = ok.then(|| std::fs::read(&tmp).ok()).flatten();
+    std::fs::remove_file(&tmp).ok();
+    Some(format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(png?)))
+}
+
+// Untested on this platform.
+#[cfg(target_os = "windows")]
+pub fn describe_app(key: &str) -> (String, Option<String>) {
+    const SCRIPT: &str = "Add-Type -AssemblyName System.Drawing; $p=$env:OVERLOOK_APP_PATH; \
+        (Get-Item -LiteralPath $p).VersionInfo.FileDescription; \
+        $b=New-Object System.Drawing.Bitmap 64,64; $g=[System.Drawing.Graphics]::FromImage($b); \
+        $g.DrawImage([System.Drawing.Icon]::ExtractAssociatedIcon($p).ToBitmap(),0,0,64,64); \
+        $m=New-Object System.IO.MemoryStream; $b.Save($m,[System.Drawing.Imaging.ImageFormat]::Png); \
+        [Convert]::ToBase64String($m.ToArray())";
+    let fallback = (crate::apps::default_name(key), None);
+    let Some(out) = Command::new("powershell").args(["-NoProfile", "-Command", SCRIPT]).env("OVERLOOK_APP_PATH", key).output().ok().filter(|o| o.status.success()) else { return fallback };
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut lines = text.lines().map(str::trim);
+    let (name, b64) = (lines.next().unwrap_or(""), lines.next().unwrap_or(""));
+    (if name.is_empty() { fallback.0 } else { name.to_string() }, (!b64.is_empty()).then(|| format!("data:image/png;base64,{b64}")))
+}
+
+// Untested on this platform.
+#[cfg(target_os = "linux")]
+pub fn describe_app(key: &str) -> (String, Option<String>) {
+    use std::path::{Path, PathBuf};
+    let fallback = (crate::apps::default_name(key), None);
+    let base = |p: &str| Path::new(p).file_name().map(|f| f.to_os_string());
+    let home = std::env::var("HOME").unwrap_or_default();
+    let dirs = ["/usr/share/applications".to_string(), format!("{home}/.local/share/applications"), "/var/lib/flatpak/exports/share/applications".to_string()];
+    for dir in dirs {
+        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        for entry in entries.flatten() {
+            let Ok(text) = std::fs::read_to_string(entry.path()) else { continue };
+            let field = |k: &str| text.lines().find_map(|l| l.strip_prefix(k)).map(|v| v.trim().to_string());
+            let exec = field("Exec=").and_then(|e| e.split_whitespace().next().map(str::to_string));
+            if exec.is_none() || base(exec.as_deref().unwrap_or("")) != base(key) {
+                continue;
+            }
+            let name = field("Name=").unwrap_or(fallback.0.clone());
+            return (name, field("Icon=").and_then(|i| linux_icon(&i)));
+        }
+    }
+    fn linux_icon(icon: &str) -> Option<String> {
+        use base64::Engine;
+        let mut candidates = vec![PathBuf::from(icon)];
+        for ext in ["png", "svg"] {
+            for size in ["64x64", "128x128", "48x48", "scalable"] {
+                candidates.push(format!("/usr/share/icons/hicolor/{size}/apps/{icon}.{ext}").into());
+            }
+            candidates.push(format!("/usr/share/pixmaps/{icon}.{ext}").into());
+        }
+        let path = candidates.into_iter().find(|p| p.is_absolute() && p.is_file())?;
+        let mime = if path.extension()? == "svg" { "image/svg+xml" } else { "image/png" };
+        Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(std::fs::read(path).ok()?)))
+    }
+    fallback
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
