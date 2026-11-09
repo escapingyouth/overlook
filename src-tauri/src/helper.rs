@@ -1,9 +1,11 @@
 //! Installs/removes the privileged per-app counter (`overlook-helper`) as a system service, with one
-//! elevation prompt per toggle. Plain std so it can be checked for every target without Tauri.
+//! elevation prompt per toggle.
 //! Variable data (paths, uid, username) never becomes script text: the scripts below are constants and
 //! the data travels as separate argv entries.
 // Each OS's builders compile everywhere so their tests run on any host.
 #![allow(dead_code)]
+
+use base64::{engine::general_purpose::STANDARD, Engine};
 
 /// Linux: `sh -c` script run by pkexec. `$1` = sidecar path, `$2` = owner uid.
 const LINUX_INSTALL: &str = r#"set -e
@@ -81,24 +83,12 @@ fn hex_token(s: &str) -> String {
     t
 }
 
-fn base64(s: &str) -> String {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::new();
-    for c in s.as_bytes().chunks(3) {
-        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
-        for i in 0..4 {
-            out.push(if i <= c.len() { A[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-        }
-    }
-    out
-}
-
 /// Windows: `-ArgumentList` entries for the elevated powershell.exe. Start-Process joins entries with spaces and
 /// does no quoting, so every entry is space- and quote-free: the fixed script is decoded from base64 (keeps the
 /// whole command line well under ShellExecute's ~2K limit) inside a space-free bootstrap, and the data follow as hex tokens that `-Command` hands to the script block as args.
 pub fn windows_elevated_args(install: bool, sidecar: &str, user: &str) -> Vec<String> {
     let script = if install { WIN_INSTALL } else { WIN_UNINSTALL };
-    let boot = format!("&([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))))", base64(script));
+    let boot = format!("&([scriptblock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('{}'))))", STANDARD.encode(script));
     let mut v: Vec<String> = ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"].map(String::from).into();
     v.push(boot);
     if install {
@@ -225,16 +215,8 @@ mod tests {
         assert_eq!(v[v.len() - 1], hex_token(user));
         assert!(v[v.len() - 1].starts_with('x') && v[v.len() - 1][1..].bytes().all(|b| b.is_ascii_hexdigit()));
         // The bootstrap carries only the constant script.
-        assert!(v[5].contains(&base64(WIN_INSTALL)));
+        assert!(v[5].contains(&STANDARD.encode(WIN_INSTALL)));
         assert_eq!(windows_elevated_args(false, NASTY, user).len(), 6);
-    }
-
-    #[test]
-    fn base64_matches_known_vectors() {
-        assert_eq!(base64("a"), "YQ==");
-        assert_eq!(base64("hi"), "aGk=");
-        assert_eq!(base64("abc"), "YWJj");
-        assert_eq!(base64("abcd"), "YWJjZA==");
     }
 
     #[cfg(unix)]

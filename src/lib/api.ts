@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { buildReport, Granularity, HourRow, hourOf, queryStartHour, rangeInterval, RangeId, Report } from "./analytics";
 
 export interface Network {
@@ -13,7 +13,6 @@ export interface Network {
   routerMac: string | null;
   firstSeen: number;
   lastSeen: number;
-  lastInterface: string | null;
 }
 
 export interface Status {
@@ -21,8 +20,6 @@ export interface Status {
   live: {
     active: { networkId: number; interface: string; kind: string; hotspot: boolean }[];
     primary: number | null;
-    rate: [number, number] | null;
-    lastSample: number;
     perApp: { enabled: boolean; error: string | null; experimental: boolean };
   };
   firstCoveredHour: number | null;
@@ -108,35 +105,32 @@ export const api = {
 
 export function useLive<T>(load: () => Promise<T>, deps: unknown[]): T | undefined {
   const [value, setValue] = useState<T>();
-  const run = useCallback(load, deps);
   useEffect(() => {
     let alive = true;
-    const refresh = () => run().then((v) => alive && setValue(v)).catch(console.error);
+    const refresh = () => load().then((v) => alive && setValue(v)).catch(console.error);
     refresh();
     const unlisten = listen("overlook://changed", refresh);
     return () => {
       alive = false;
       unlisten.then((f) => f());
     };
-  }, [run]);
+  }, deps);
   return value;
 }
 
-// Per-second rate pushed by the backend; falls back to the 30s sampled average until the first tick.
-export function useRate(fallback: [number, number] | null): [number, number] | null {
+/** Per-second rate pushed by the backend, while `connected`. */
+export function useRate(connected: boolean): [number, number] | null {
   const [live, setLive] = useState<[number, number] | null>(null);
   useEffect(() => {
     const unlisten = listen<[number, number]>("overlook://rate", (e) => setLive(e.payload));
     return () => void unlisten.then((f) => f());
   }, []);
-  return fallback && (live ?? fallback);
+  return connected ? live : null;
 }
 
 export const useCaps = () => useLive(api.caps, []);
 
-export function useStatus() {
-  return useLive(api.status, []);
-}
+export const useStatus = () => useLive(api.status, []);
 
 export function useReport(network: number | null, range: RangeId, granularity: Granularity | undefined, historyStartHour: number | null) {
   return useLive<Report>(async () => {

@@ -1,4 +1,4 @@
-import { createContext, useContext, useState } from "react";
+import { useState } from "react";
 import { bucketHours, GRANULARITY_LABEL, Granularity, hourOf, RangeId, rangeInfo, Report, weekStart } from "../lib/analytics";
 import { api, dismissHotspot, displayName, isHotspot, Network, Status, useCaps, useLive, useRate, useReport } from "../lib/api";
 import { ago, bytes, fmtDate, number, percent, rate, scaled } from "../lib/format";
@@ -8,9 +8,6 @@ import { bucketTitle, PatternChart, SeriesVisibility, TrendChart } from "./Usage
 import { Donut } from "./Spark";
 import { CapsCard } from "./Caps";
 import { PickedSpan, TopApps } from "./TopApps";
-
-const ReportContext = createContext<Report | null>(null);
-const useReportContext = () => useContext(ReportContext)!;
 
 export function Dashboard({ status, network, range, narrow, onSelect, onRename, onAccuracy, onCaps, onNewCap, onEnablePerApp }: Readonly<{
   status: Status;
@@ -43,15 +40,14 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
   };
 
   return (
-    <ReportContext.Provider value={report}>
     <div className="page">
       <PageHead status={status} network={network} />
 
       <div className="kpi-grid">
-        <KpiCard icon="arrows" title="Total used" value={report.total} previous={report.previousTotal} />
-        <KpiCard icon="cloudDown" title="Downloaded" value={report.rx} previous={report.previousRx} />
-        <KpiCard icon="cloudUp" title="Uploaded" value={report.tx} previous={report.previousTx} />
-        <KpiCard icon="average" title="Daily average" value={report.dailyAverage} previous={null}
+        <KpiCard report={report} icon="arrows" title="Total used" value={report.total} previous={report.previousTotal} />
+        <KpiCard report={report} icon="cloudDown" title="Downloaded" value={report.rx} previous={report.previousRx} />
+        <KpiCard report={report} icon="cloudUp" title="Uploaded" value={report.tx} previous={report.previousTx} />
+        <KpiCard report={report} icon="average" title="Daily average" value={report.dailyAverage} previous={null}
           note={report.trackedDays ? `${report.trackedDays} day${report.trackedDays === 1 ? "" : "s"}` : undefined} />
       </div>
 
@@ -72,7 +68,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
               </div>
             </div>
             {info.granularities.length > 1 && (
-              <Segmented size="sm" label="Granularity" value={report.granularity} onChange={(g) => {
+              <Segmented label="Granularity" value={report.granularity} onChange={(g) => {
                   setGranularity({ ...granularity, [range]: g });
                   setPickedAt(null);
                 }}
@@ -101,7 +97,7 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
       <div className={`row ${network ? "three" : ""}`}>
         {range !== "day" && (
           <Card title="Typical usage" subtitle={pattern === "hour" ? "Average per tracked day" : "Average per tracked weekday"}
-            action={<Segmented size="sm" label="Pattern" value={pattern} onChange={setPattern} options={[{ value: "hour", label: "Hour" }, { value: "weekday", label: "Weekday" }]} />}>
+            action={<Segmented label="Pattern" value={pattern} onChange={setPattern} options={[{ value: "hour", label: "Hour" }, { value: "weekday", label: "Weekday" }]} />}>
             {pattern === "hour" ? (
               <PatternChart values={report.hourOfDay} labels={report.hourOfDay.map((_, h) => (h % 6 === 0 ? fmtDate(new Date(2026, 0, 1, h), { hour: "numeric" }) : null))} />
             ) : (
@@ -115,7 +111,6 @@ export function Dashboard({ status, network, range, narrow, onSelect, onRename, 
 
       <Footnote report={report} network={network} onAccuracy={onAccuracy} />
     </div>
-    </ReportContext.Provider>
   );
 }
 
@@ -159,7 +154,7 @@ function PageHead({ status, network }: Readonly<{ status: Status; network: Netwo
   const active = network ? status.live.active.find((a) => a.networkId === network.id) : status.live.active.find((a) => a.networkId === status.live.primary);
   const current = status.networks.find((n) => n.id === status.live.primary);
   const live = network ? !!active : !!current;
-  const now = useRate(status.live.rate);
+  const now = useRate(status.live.primary !== null);
   const showRate = now && (network ? status.live.primary === network.id : true);
   return (
     <div className="page-head">
@@ -189,8 +184,7 @@ function DeltaPill({ value, previous, report }: Readonly<{ value: number | null;
   return <span className="delta-pill num" title={`vs ${bytes(previous)} in the ${rangeInfo(report.range).previous}`}>{text}</span>;
 }
 
-function KpiCard({ icon, title, value, previous, note }: Readonly<{ icon: IconName; title: string; value: number | null; previous: number | null; note?: string }>) {
-  const report = useReportContext();
+function KpiCard({ report, icon, title, value, previous, note }: Readonly<{ report: Report; icon: IconName; title: string; value: number | null; previous: number | null; note?: string }>) {
   return (
     <section className="kpi-card">
       <div className="kpi-top">

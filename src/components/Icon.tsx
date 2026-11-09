@@ -1,4 +1,4 @@
-import { HugeiconsIcon } from "@hugeicons/react";
+import { createElement } from "react";
 import {
   Alert02Icon,
   ArrowLeft01Icon,
@@ -28,7 +28,6 @@ import {
   Database01Icon,
   Delete02Icon,
   Edit02Icon,
-  EqualSignIcon,
   EthernetPortIcon,
   Folder01Icon,
   InformationCircleIcon,
@@ -37,8 +36,6 @@ import {
   PowerIcon,
   Settings01Icon,
   SquareLock02Icon,
-  TradeDownIcon,
-  TradeUpIcon,
   Wifi01Icon,
 } from "@hugeicons/core-free-icons";
 
@@ -54,9 +51,6 @@ const icons = {
   arrows: ArrowDataTransferVerticalIcon,
   info: InformationCircleIcon,
   location: Location01Icon,
-  trendUp: TradeUpIcon,
-  trendDown: TradeDownIcon,
-  equal: EqualSignIcon,
   edit: Edit02Icon,
   trash: Delete02Icon,
   folder: Folder01Icon,
@@ -88,7 +82,11 @@ const icons = {
 export type IconName = keyof typeof icons;
 
 export function Icon({ name, size = 16, className, style }: Readonly<{ name: IconName; size?: number; className?: string; style?: React.CSSProperties }>) {
-  return <HugeiconsIcon icon={icons[name]} size={size} strokeWidth={1.6} color="currentColor" className={`icon ${className ?? ""}`} style={style} aria-hidden />;
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={`icon ${className ?? ""}`} style={style} aria-hidden>
+      {icons[name].map(([tag, attrs]) => createElement(tag, { ...attrs, stroke: "currentColor", strokeWidth: 1.6 }))}
+    </svg>
+  );
 }
 
 export const kindIcon = (kind?: string): IconName => (kind === "wifi" ? "wifi" : kind === "ethernet" ? "ethernet" : "grid");

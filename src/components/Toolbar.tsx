@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { hourOf, queryStartHour, RANGES, RangeId, rangeInfo, rangeInterval } from "../lib/analytics";
+import { hourOf, RANGES, RangeId, rangeInfo, rangeInterval } from "../lib/analytics";
 import { api, displayName, Network } from "../lib/api";
 import { Icon } from "./Icon";
 
@@ -56,10 +56,10 @@ export function ExportButton({ network, range }: Readonly<{ network: Network | n
       const now = new Date();
       const { start } = rangeInterval(range, now);
       const startHour = hourOf(start.getTime());
-      const { rows } = await api.usage(network?.id ?? null, Math.max(startHour, queryStartHour(range, now)), hourOf(now.getTime()) + 1);
+      const { rows } = await api.usage(network?.id ?? null, startHour, hourOf(now.getTime()) + 1);
       const name = network ? displayName(network) : "All networks";
       const lines = [["hour_start_local", "hour_start_utc", "network", "download_bytes", "upload_bytes", "total_bytes", "estimated_bytes"].join(",")];
-      for (const r of rows.filter((r) => r.hour >= startHour)) {
+      for (const r of rows) {
         const d = new Date(r.hour * 3_600_000);
         const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:00`;
         lines.push([local, d.toISOString(), name, r.rx, r.tx, r.rx + r.tx, r.estimatedRx + r.estimatedTx].map(csvField).join(","));

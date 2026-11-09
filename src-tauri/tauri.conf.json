@@ -6,7 +6,7 @@
   "build": {
     "beforeDevCommand": "node scripts/build-helper.mjs && npm run dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "node scripts/build-helper.mjs && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -53,7 +53,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "macOS": { "minimumSystemVersion": "11.0" },
+    "macOS": { "minimumSystemVersion": "12.3" },
     "linux": { "deb": { "depends": ["iw"] } }
   }
 }

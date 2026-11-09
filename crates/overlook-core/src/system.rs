@@ -157,15 +157,6 @@ pub fn neighbor_mac(_ip: &str, _interface: &str) -> Option<String> {
     None
 }
 
-pub fn parse_arp(output: &str, ip: &str, interface: &str) -> Option<String> {
-    let needle = format!("({ip})");
-    output.lines().find_map(|l| {
-        let f: Vec<_> = l.split_whitespace().collect();
-        let on = f.iter().position(|t| *t == "on")?;
-        (f.contains(&needle.as_str()) && f.get(on + 1) == Some(&interface)).then(|| normalize_mac(f.get(3)?)).flatten()
-    })
-}
-
 pub fn normalize_mac(raw: &str) -> Option<String> {
     let parts: Vec<_> = raw.split([':', '-']).collect();
     if parts.len() != 6 || !parts.iter().all(|p| (1..=2).contains(&p.len()) && p.chars().all(|c| c.is_ascii_hexdigit())) {
@@ -466,12 +457,10 @@ mod tests {
         assert_eq!(parse_netsh(out, "Ethernet"), None);
     }
 
-    #[test] fn arp_fallback_matches_ip_and_interface() {
-        let out = "? (10.0.0.9) at 1:2:3:4:5:6 on en1 ifscope [ethernet]\n? (10.0.0.1) at 8a:79:3:bc:ad:59 on en0 ifscope [ethernet]\n? (10.0.0.7) at (incomplete) on en0 ifscope [ethernet]";
-        assert_eq!(parse_arp(out, "10.0.0.1", "en0").as_deref(), Some("8a:79:03:bc:ad:59"));
-        assert_eq!(parse_arp(out, "10.0.0.1", "en1"), None);
-        assert_eq!(parse_arp(out, "10.0.0.7", "en0"), None);
+    #[test] fn macs_normalize() {
+        assert_eq!(normalize_mac("8a:79:3:bc:ad:59").as_deref(), Some("8a:79:03:bc:ad:59"));
         assert_eq!(normalize_mac("AA-BB-CC-DD-EE-0F").as_deref(), Some("aa:bb:cc:dd:ee:0f"));
+        assert_eq!(normalize_mac("(incomplete)"), None);
     }
 
     #[test] fn phone_hotspots_are_recognised() {
