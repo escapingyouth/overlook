@@ -108,7 +108,7 @@ export function useLive<T>(load: () => Promise<T>, deps: unknown[]): T | undefin
   useEffect(() => {
     let alive = true;
     const refresh = () => load().then((v) => alive && setValue(v)).catch(console.error);
-    refresh();
+    void refresh();
     const unlisten = listen("overlook://changed", refresh);
     return () => {
       alive = false;
