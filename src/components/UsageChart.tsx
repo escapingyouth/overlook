@@ -2,8 +2,6 @@ import { useLayoutEffect, useRef, useState } from "react";
 import { Bucket, bucketTotal, Granularity, Report } from "../lib/analytics";
 import { axisUnit, bytes, fmtDate, niceTicks, number } from "../lib/format";
 
-export type SeriesMode = "both" | "download" | "upload";
-
 export function bucketTitle(b: Bucket, g: Granularity): string {
   const partial = b.end.getTime() > Date.now() - 60_000 ? " (so far)" : "";
   switch (g) {
@@ -50,99 +48,39 @@ const useWidth = () => {
   return [ref, width] as const;
 };
 
-export function UsageChart({ report, mode, height = 260, compact = false }: Readonly<{ report: Report; mode: SeriesMode; height?: number; compact?: boolean }>) {
+/** The tray's bars-only view of a report. */
+export function UsageChart({ report }: Readonly<{ report: Report }>) {
   const [ref, width] = useWidth();
-  const [hover, setHover] = useState<number | null>(null);
-
-  const rx = (b: Bucket) => (mode === "upload" ? 0 : b.rx ?? 0);
-  const tx = (b: Bucket) => (mode === "download" ? 0 : b.tx ?? 0);
+  const height = 48;
+  const r = 1.5;
   const buckets = report.buckets;
-  const max = Math.max(0, ...buckets.map((b) => rx(b) + tx(b)));
-  const { divisor, unit } = axisUnit(max);
-  const ticks = niceTicks(max / divisor, compact ? 2 : 4);
+  const max = Math.max(0, ...buckets.map((b) => (b.rx ?? 0) + (b.tx ?? 0)));
+  const { divisor } = axisUnit(max);
+  const ticks = niceTicks(max / divisor, 2);
   const top = ticks[ticks.length - 1] * divisor || 1;
-
-  const left = compact ? 0 : 52;
-  const bottom = compact ? 0 : 24;
-  const plotW = Math.max(0, width - left);
-  const plotH = height - bottom;
-  const band = buckets.length ? plotW / buckets.length : 0;
+  const band = buckets.length ? width / buckets.length : 0;
   const barW = Math.max(1, Math.min(band * (buckets.length > 40 ? 0.72 : 0.58), 36));
-  const y = (v: number) => plotH - (v / top) * plotH;
-  const labelStep = Math.max(1, Math.ceil(buckets.length / Math.max(2, Math.floor(plotW / 84))));
-  const tracked = buckets.some((b) => b.rx !== null);
-
-  const onMove = (e: React.MouseEvent) => {
-    const x = e.clientX - e.currentTarget.getBoundingClientRect().left - left;
-    const i = Math.floor(x / band);
-    setHover(i >= 0 && i < buckets.length ? i : null);
-  };
-
-  const hovered = hover !== null ? buckets[hover] : null;
-  const tipLeft = hover !== null ? left + band * (hover + 0.5) : 0;
-  const flip = tipLeft > width - 200;
+  const y = (v: number) => height - (v / top) * height;
 
   return (
-    <div className="chart" ref={ref} style={{ height }} onMouseLeave={() => setHover(null)}>
+    <div className="chart" ref={ref} style={{ height }}>
       {width > 0 && (
-        <svg width={width} height={height} onMouseMove={compact ? undefined : onMove} role="img" aria-label={`Data usage chart, ${report.granularity} totals`}>
-          {!compact &&
-            ticks.map((t) => (
-              <g key={t}>
-                <line className="grid" x1={left} x2={width} y1={y(t * divisor)} y2={y(t * divisor)} strokeDasharray={t === 0 ? undefined : "2 4"} />
-                <text x={left - 10} y={y(t * divisor)} dy="0.32em" textAnchor="end">{t === 0 ? "0" : `${number(t)} ${unit}`}</text>
-              </g>
-            ))}
-          {hovered && <rect className="hover-band" x={left + band * hover!} y={0} width={band} height={plotH} rx={6} />}
+        <svg width={width} height={height} role="img" aria-label={`Data usage chart, ${report.granularity} totals`}>
           {buckets.map((b, i) => {
             if (b.rx === null) return null;
-            const x = left + band * i + (band - barW) / 2;
-            const d = rx(b);
-            const u = tx(b);
-            const total = bucketTotal(b) ?? 0;
-            const faded = hover !== null && hover !== i;
-            const estimated = total > 0 && b.estimated / total > 0.5;
-            const opacity = (faded ? 0.4 : 1) * (estimated ? 0.5 : 1);
+            const x = band * i + (band - barW) / 2;
+            const d = b.rx;
+            const u = b.tx ?? 0;
+            const estimated = d + u > 0 && b.estimated / (d + u) > 0.5;
             const gap = d > 0 && u > 0 ? 2 : 0;
-            const r = compact ? 1.5 : 3;
             return (
-              <g key={i} opacity={opacity}>
-                {!compact && <path className="track" d={topRounded(x, 0, barW, plotH, r)} />}
-                {d > 0 && <path d={topRounded(x, y(d), barW, plotH - y(d), u > 0 ? 0 : r)} fill="var(--download)" />}
+              <g key={i} opacity={estimated ? 0.5 : 1}>
+                {d > 0 && <path d={topRounded(x, y(d), barW, height - y(d), u > 0 ? 0 : r)} fill="var(--download)" />}
                 {u > 0 && <path d={topRounded(x, y(d + u), barW, Math.max(1, y(d) - y(d + u) - gap), r)} fill="var(--upload)" />}
               </g>
             );
           })}
-          {!compact &&
-            buckets.map((b, i) =>
-              i % labelStep === 0 ? (
-                <text key={i} x={left + band * (i + 0.5)} y={height - 6} textAnchor="middle">{axisLabel(b.start, report)}</text>
-              ) : null,
-            )}
         </svg>
-      )}
-      {!compact && max === 0 && (
-        <div className="chart-empty">
-          <div>
-            <strong>{tracked ? "No data used in this period" : "Not tracked during this period"}</strong>
-            {tracked ? "Usage appears here as it's recorded." : "Overlook can only count traffic while it's running."}
-          </div>
-        </div>
-      )}
-      {hovered && (
-        <div className="tooltip" style={{ top: 4, left: flip ? undefined : tipLeft + 14, right: flip ? width - tipLeft + 14 : undefined }}>
-          <div className="t-title">{bucketTitle(hovered, report.granularity)}</div>
-          {hovered.rx === null ? (
-            <div className="t-row">Not tracked: Overlook wasn't running</div>
-          ) : (
-            <>
-              {mode !== "upload" && <div className="t-row"><span className="swatch" style={{ background: "var(--download)" }} />Download<span className="v num">{bytes(hovered.rx)}</span></div>}
-              {mode !== "download" && <div className="t-row"><span className="swatch" style={{ background: "var(--upload)" }} />Upload<span className="v num">{bytes(hovered.tx ?? 0)}</span></div>}
-              {mode === "both" && <div className="t-row t-total">Total<span className="v num">{bytes(bucketTotal(hovered) ?? 0)}</span></div>}
-              {hovered.estimated > 0 && <div className="t-note">Includes {bytes(hovered.estimated)} estimated</div>}
-            </>
-          )}
-        </div>
       )}
     </div>
   );

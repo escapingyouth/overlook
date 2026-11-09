@@ -1,17 +1,16 @@
-import { ReactNode, useEffect, useRef } from "react";
+import { ReactNode, useLayoutEffect, useRef } from "react";
 import { scaled, number } from "../lib/format";
 
-export function Segmented<T extends string>({ value, options, onChange, size, label }: Readonly<{
+export function Segmented<T extends string>({ value, options, onChange, label }: Readonly<{
   value: T;
-  options: { value: T; label: string; title?: string }[];
+  options: { value: T; label: string }[];
   onChange: (v: T) => void;
-  size?: "sm";
   label: string;
 }>) {
   return (
-    <div className={`seg ${size ?? ""}`} role="group" aria-label={label}>
+    <div className="seg sm" role="group" aria-label={label}>
       {options.map((o) => (
-        <button type="button" key={o.value} aria-pressed={o.value === value} title={o.title} onClick={() => onChange(o.value)}>
+        <button type="button" key={o.value} aria-pressed={o.value === value} onClick={() => onChange(o.value)}>
           {o.label}
         </button>
       ))}
@@ -35,18 +34,16 @@ export function Toggle({ checked, onChange, label }: Readonly<{ checked: boolean
   return <button type="button" className="toggle" role="switch" aria-checked={checked} aria-label={label} onClick={() => onChange(!checked)} />;
 }
 
-export function Card({ title, subtitle, action, children, className }: Readonly<{ title?: string; subtitle?: ReactNode; action?: ReactNode; children: ReactNode; className?: string }>) {
+export function Card({ title, subtitle, action, children }: Readonly<{ title: string; subtitle?: ReactNode; action?: ReactNode; children: ReactNode }>) {
   return (
-    <section className={`card ${className ?? ""}`}>
-      {(title || action) && (
-        <div className="card-head">
-          <div>
-            {title && <h3 className="card-title">{title}</h3>}
-            {subtitle && <div className="card-sub">{subtitle}</div>}
-          </div>
-          {action}
+    <section className="card">
+      <div className="card-head">
+        <div>
+          <h3 className="card-title">{title}</h3>
+          {subtitle && <div className="card-sub">{subtitle}</div>}
         </div>
-      )}
+        {action}
+      </div>
       {children}
     </section>
   );
@@ -65,32 +62,18 @@ export function Bytes({ value, className = "stat-value" }: Readonly<{ value: num
 
 export function Dialog({ children, onClose, wide }: Readonly<{ children: ReactNode; onClose: () => void; wide?: boolean }>) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
-    const key = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", key);
-    return () => window.removeEventListener("keydown", key);
-  }, [onClose]);
-  // Move focus into the dialog (the [data-autofocus] element, else the first control) and give it back on close.
-  useEffect(() => {
-    const opener = document.activeElement as HTMLElement | null;
-    ref.current?.querySelector<HTMLElement>("[data-autofocus], button, input, select, textarea")?.focus();
-    return () => opener?.focus();
+  // A layout effect, so close() runs while the dialog is still attached and can hand focus back.
+  useLayoutEffect(() => {
+    const dialog = ref.current!;
+    dialog.showModal();
+    dialog.querySelector<HTMLElement>("[data-autofocus]")?.focus();
+    return () => dialog.close();
   }, []);
+  // React bubbles these through nested dialogs; the target check keeps them to the topmost one.
+  const dismiss = (e: React.SyntheticEvent) => e.target === e.currentTarget && onClose();
   return (
-    <div className="backdrop" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <dialog open ref={ref} className={`dialog ${wide ? "wide" : ""}`} aria-modal>
-        {children}
-      </dialog>
-    </div>
-  );
-}
-
-export function SplitBar({ rx, tx, height = 8 }: Readonly<{ rx: number; tx: number; height?: number }>) {
-  const total = rx + tx;
-  return (
-    <div className="split" style={{ height }} aria-hidden>
-      {total > 0 && rx > 0 && <div style={{ width: `${(rx / total) * 100}%`, background: "var(--download)", minWidth: height }} />}
-      {total > 0 && tx > 0 && <div style={{ flex: 1, background: "var(--upload)", minWidth: height }} />}
-    </div>
+    <dialog ref={ref} className={`dialog ${wide ? "wide" : ""}`} onCancel={dismiss} onMouseDown={dismiss}>
+      <div>{children}</div>
+    </dialog>
   );
 }

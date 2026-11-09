@@ -234,29 +234,6 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
-fn migrate_legacy(db: &PathBuf) {
-    if db.exists() {
-        return;
-    }
-    let mut sources = vec![];
-    if let Some(parent) = db.parent().and_then(|d| d.parent()) {
-        sources.push(parent.join("app.tally.desktop/usage.sqlite"));
-    }
-    if cfg!(target_os = "macos") {
-        if let Some(home) = std::env::var_os("HOME") {
-            sources.push(PathBuf::from(home).join("Library/Application Support/Tally/usage.sqlite"));
-        }
-    }
-    let Some(legacy) = sources.into_iter().find(|p| p.exists()) else { return };
-    for suffix in ["", "-wal", "-shm"] {
-        let from = PathBuf::from(format!("{}{suffix}", legacy.display()));
-        if from.exists() {
-            std::fs::copy(&from, format!("{}{suffix}", db.display())).ok();
-        }
-    }
-}
-
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| show_main_window(app)))
@@ -268,7 +245,6 @@ pub fn run() {
             let dir = std::env::var("OVERLOOK_DATA_DIR").map(PathBuf::from).unwrap_or(app.path().app_data_dir()?);
             std::fs::create_dir_all(&dir)?;
             let db_path = dir.join("usage.sqlite");
-            migrate_legacy(&db_path);
             let mut store = Store::open(&db_path.to_string_lossy())?;
             prune(&mut store);
             let shaped = store.meta("throttled").unwrap_or_default();

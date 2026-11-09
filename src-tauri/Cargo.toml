@@ -6,13 +6,13 @@ edition = "2021"
 
 [lib]
 name = "overlook_lib"
-crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
 overlook-core = { path = "../crates/overlook-core" }
+base64 = "0.22"
 tauri = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }
 tauri-plugin-autostart = "2"
 tauri-plugin-positioner = { version = "2", features = ["tray-icon"] }

@@ -279,7 +279,7 @@ function CapForm({ status, cap, onDone }: Readonly<{ status: Status; cap: Cap; o
           </Setting>
         )}
         <Setting title="Period">
-          <Segmented size="sm" label="Period" value={draft.period} options={(["day", "week", "month"] as const).map((p) => ({ value: p, label: PERIOD[p] }))}
+          <Segmented label="Period" value={draft.period} options={(["day", "week", "month"] as const).map((p) => ({ value: p, label: PERIOD[p] }))}
             onChange={(period) => set({ period, reset: period === "week" ? weekStart() : 1 })} />
         </Setting>
         {draft.period !== "day" && (

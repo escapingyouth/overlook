@@ -131,7 +131,6 @@ export interface Report {
   previousRx: number | null;
   previousTx: number | null;
   days: { day: Date; rx: number; tx: number; estimated: number; coveredSeconds: number }[];
-  change: number | null;
   hourOfDay: { rx: number; tx: number }[];
   weekday: { rx: number; tx: number }[];
 }
@@ -166,40 +165,27 @@ export function buildReport(opts: {
     buckets.push({ start: cursor, end: bEnd, rx: null, tx: null, estimated: 0 });
     cursor = bEnd;
   }
-  const index = (ms: number) => {
-    let lo = 0;
-    let hi = buckets.length - 1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (ms < buckets[mid].start.getTime()) hi = mid - 1;
-      else if (ms >= buckets[mid].end.getTime()) lo = mid + 1;
-      else return mid;
-    }
-    return -1;
-  };
+  const bucketAt = (ms: number) => buckets.find((b) => ms >= b.start.getTime() && ms < b.end.getTime());
   for (const h of covered) {
-    const b = buckets[index(h * HOUR)];
+    const b = bucketAt(h * HOUR);
     if (b && b.rx === null) {
       b.rx = 0;
       b.tx = 0;
     }
   }
   for (const r of current) {
-    const b = buckets[index(r.hour * HOUR)];
+    const b = bucketAt(r.hour * HOUR);
     if (!b) continue;
     b.rx = (b.rx ?? 0) + r.rx;
     b.tx = (b.tx ?? 0) + r.tx;
     b.estimated += r.estimatedRx + r.estimatedTx;
   }
 
-  const days = new Map<number, number>();
   const dayKey = (hour: number) => startOf(dateOfHour(hour), "day").getTime();
-  for (const h of covered) if (!days.has(dayKey(h))) days.set(dayKey(h), 0);
   const hourOfDay = Array.from({ length: 24 }, () => ({ rx: 0, tx: 0 }));
   const weekday = Array.from({ length: 7 }, () => ({ rx: 0, tx: 0 }));
   for (const r of current) {
     const date = dateOfHour(r.hour);
-    days.set(dayKey(r.hour), (days.get(dayKey(r.hour)) ?? 0) + r.rx + r.tx);
     hourOfDay[date.getHours()].rx += r.rx;
     hourOfDay[date.getHours()].tx += r.tx;
     weekday[date.getDay()].rx += r.rx;
@@ -219,9 +205,10 @@ export function buildReport(opts: {
     e.estimated += r.estimatedRx + r.estimatedTx;
     e.coveredSeconds = Math.max(e.coveredSeconds, 1);
   }
-  const trackedDays = days.size;
+  const dayList = [...dayDetail].filter(([, v]) => v.coveredSeconds > 0).map(([d, v]) => ({ day: new Date(d), total: v.rx + v.tx }));
+  const trackedDays = dayList.length;
   const weekdayCounts = Array(7).fill(0);
-  for (const d of days.keys()) weekdayCounts[new Date(d).getDay()]++;
+  for (const d of dayList) weekdayCounts[d.day.getDay()]++;
   const perDay = Math.max(trackedDays, 1);
   hourOfDay.forEach((v) => {
     v.rx /= perDay;
@@ -237,7 +224,6 @@ export function buildReport(opts: {
   const tx = current.reduce((s, r) => s + r.tx, 0);
   const total = rx + tx;
   const estimated = current.reduce((s, r) => s + r.estimatedRx + r.estimatedTx, 0);
-  const dayList = [...days].map(([d, t]) => ({ day: new Date(d), total: t }));
   const today = startOf(now, "day").getTime();
   const peakDay = dayList.filter((d) => d.total > 0).reduce<DayUsage | null>((m, d) => (!m || d.total > m.total ? d : m), null);
   const complete = dayList.filter((d) => d.day.getTime() < today && d.total > 0);
@@ -248,13 +234,11 @@ export function buildReport(opts: {
   let previousTotal: number | null = null;
   let previousRx: number | null = null;
   let previousTx: number | null = null;
-  let change: number | null = null;
   if (opts.historyStartHour !== null && opts.historyStartHour <= prevStartHour + 1) {
     const prev = rows.filter((r) => r.hour >= prevStartHour && r.hour < startHour);
     previousRx = prev.reduce((s, r) => s + r.rx, 0);
     previousTx = prev.reduce((s, r) => s + r.tx, 0);
     previousTotal = previousRx + previousTx;
-    if (previousTotal > 0) change = (total - previousTotal) / previousTotal;
   }
 
   return {
@@ -276,7 +260,6 @@ export function buildReport(opts: {
     previousRx,
     previousTx,
     days: [...dayDetail].map(([d, v]) => ({ day: new Date(d), ...v })),
-    change,
     hourOfDay,
     weekday,
   };

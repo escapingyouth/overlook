@@ -60,7 +60,6 @@ describe("report", () => {
     expect(bucketTotal(r.buckets[6])).toBe(1200);
     expect(r.peakDay?.total).toBe(3000);
     expect(r.lowestDay).toBeNull();
-    expect(r.change).toBeNull();
   });
   it("doesn't leak the previous window into the current one", () => {
     const r = report("week", now, [row(at(7, 23), 500), row(at(6, 0), 7)]);
@@ -69,9 +68,8 @@ describe("report", () => {
   it("compares with the previous period only when history covers it", () => {
     const rows = [row(at(8, 10), 1000), row(at(1, 10), 1500)];
     const early = hourOf(at(20, 0).getTime());
-    expect(report("week", now, rows, [], early).change).toBeCloseTo(0.5);
     expect(report("week", now, rows, [], early).previousTotal).toBe(1000);
-    expect(report("week", now, rows, [], hourOf(at(8, 0).getTime())).change).toBeNull();
+    expect(report("week", now, rows, [], hourOf(at(8, 0).getTime())).previousTotal).toBeNull();
     expect(report("week", now, rows, [], early).previousRx).toBe(1000);
   });
   it("lists every calendar day with coverage", () => {

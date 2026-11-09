@@ -2,8 +2,6 @@
 
 Overlook records how much data you use on each network. It keeps a separate history for each network and shows interactive charts for ranges from 24 hours to 1 year. It runs from the menu bar / system tray, and everything stays on your computer.
 
-![Overview](docs/overview-dark.png)
-
 ## Build & run
 Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri system packages](https://tauri.app/start/prerequisites/) (webkit2gtk, libayatana-appindicator).
 
@@ -127,7 +125,7 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
   - Canvas `#09090B`, cards `#111113`, controls `#18181B`.
   - Borders are hairlines at 6.5% white.
   - Text uses three steps: `#EDEDEF`, `#9A9AA3`, `#5D5D66`.
-- **App icon:** lavender/indigo binoculars on a near-black rounded square (`docs/app-icon.png`); the menu-bar/tray icon is a monochrome template version, and the sidebar logo uses Hugeicons' binoculars.
+- **App icon:** lavender/indigo binoculars on a near-black rounded square; the menu-bar/tray icon is a monochrome template version, and the sidebar logo uses Hugeicons' binoculars.
 - **Typeface:** Plus Jakarta Sans (variable), bundled through Fontsource so it works offline and renders identically on every OS. Body text uses weight 450 with slightly opened tracking; numbers use tabular figures.
 - **Palette:** lavender and indigo throughout. Download is lavender `#A29EF6` (dark) / `#9B98F3` (light), upload is indigo `#6366F1` / `#4F46E5`, and the accent is indigo. The pair passes colour-vision-deficiency and contrast checks in both modes; the dark lavender sits slightly above the recommended lightness band, which is deliberate for this look. Green, amber and red are reserved for status. The theme follows the system or a persisted System/Light/Dark choice, and the native title bar matches it.
 - **Layout:** separate borderless cards (the surface sits on a darker canvas in dark mode, white on light grey in light mode) with 16 px gutters.
