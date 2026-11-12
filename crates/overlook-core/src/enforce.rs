@@ -85,6 +85,107 @@ fn shape(_interface: &str, _kbps: Option<i64>) -> bool {
     false
 }
 
+/// Marking a connection metered makes the OS hold off on updates and cloud sync over it.
+/// macOS has no public way to set Low Data Mode, though it already treats phone hotspots as expensive.
+pub const CAN_MARK_METERED: bool = cfg!(any(target_os = "windows", target_os = "linux"));
+
+/// Marks the connection on `interface` metered. Returns what `unmark` needs to put it back,
+/// or None if it was already metered (the user's own choice is left alone) or it failed.
+#[cfg(target_os = "linux")]
+fn mark(interface: &str, _kind: &str) -> Option<String> {
+    let out = |args: &[&str]| Command::new("nmcli").args(args).output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string());
+    let uuid = out(&["-g", "GENERAL.CON-UUID", "device", "show", interface]).filter(|u| !u.is_empty())?;
+    let before = out(&["-g", "connection.metered", "connection", "show", &uuid])?;
+    if before == "yes" || !run(Command::new("nmcli").args(["connection", "modify", &uuid, "connection.metered", "yes"])) {
+        return None;
+    }
+    run(Command::new("nmcli").args(["device", "reapply", interface]));
+    Some(format!("{uuid}|{before}|{interface}"))
+}
+
+#[cfg(target_os = "linux")]
+fn unmark(token: &str) -> bool {
+    let mut parts = token.splitn(3, '|');
+    let (Some(uuid), Some(before), Some(interface)) = (parts.next(), parts.next(), parts.next()) else { return true };
+    let ok = run(Command::new("nmcli").args(["connection", "modify", uuid, "connection.metered", before]));
+    run(Command::new("nmcli").args(["device", "reapply", interface]));
+    ok
+}
+
+// Windows: the Wi-Fi profile's cost, which Windows Update, OneDrive and Store respect. Ethernet needs the registry, so Wi-Fi only.
+#[cfg(target_os = "windows")]
+fn mark(interface: &str, kind: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    let netsh = |args: &[&str]| Command::new("netsh").args(args).creation_flags(0x0800_0000).output().ok().filter(|o| o.status.success());
+    let iface = netdev::get_interfaces().into_iter().find(|i| i.name == interface).filter(|_| kind == "wifi")?;
+    let profile = crate::system::ssid(&iface)?;
+    let shown = netsh(&["wlan", "show", "profile", &format!("name={profile}")])?;
+    if !parse_netsh_cost_unrestricted(&String::from_utf8_lossy(&shown.stdout)) {
+        return None;
+    }
+    netsh(&["wlan", "set", "profileparameter", &format!("name={profile}"), "cost=Fixed"])?;
+    Some(profile)
+}
+
+#[cfg(target_os = "windows")]
+fn unmark(profile: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    run(Command::new("netsh").args(["wlan", "set", "profileparameter", &format!("name={profile}"), "cost=Default"]).creation_flags(0x0800_0000))
+}
+
+/// netsh prints "Cost : Unrestricted" for an ordinary profile, "Fixed"/"Variable" for a metered one.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn parse_netsh_cost_unrestricted(output: &str) -> bool {
+    output.lines().find_map(|l| l.trim().strip_prefix("Cost").and_then(|r| r.trim_start().strip_prefix(':'))).is_some_and(|c| matches!(c.trim(), "Unrestricted" | "Default"))
+}
+
+#[cfg(target_os = "macos")]
+fn mark(_interface: &str, _kind: &str) -> Option<String> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn unmark(_token: &str) -> bool {
+    true
+}
+
+/// Keeps OS metered flags in line with the data saver, and puts each connection back the way it was.
+#[derive(Debug, Default)]
+pub struct Marker {
+    /// network id → what `unmark` needs.
+    marked: HashMap<i64, String>,
+    /// Networks already tried this session (already metered, or marking failed), so nothing reruns every tick.
+    tried: HashSet<i64>,
+}
+
+impl Marker {
+    pub fn restore(saved: &str) -> Marker {
+        Marker { marked: serde_json::from_str(saved).unwrap_or_default(), tried: HashSet::new() }
+    }
+
+    pub fn saved(&self) -> String {
+        serde_json::to_string(&self.marked).unwrap_or_default()
+    }
+
+    /// `want`: (network id, interface, kind) the data saver covers right now.
+    pub fn apply(&mut self, want: &[(i64, String, String)]) {
+        self.apply_with(want, mark, unmark)
+    }
+
+    fn apply_with(&mut self, want: &[(i64, String, String)], mut mark: impl FnMut(&str, &str) -> Option<String>, mut unmark: impl FnMut(&str) -> bool) {
+        let ids: HashSet<i64> = want.iter().map(|w| w.0).collect();
+        self.marked.retain(|id, token| ids.contains(id) || !unmark(token));
+        self.tried.retain(|id| ids.contains(id));
+        for (id, interface, kind) in want {
+            if !self.marked.contains_key(id) && self.tried.insert(*id) {
+                if let Some(token) = mark(interface, kind) {
+                    self.marked.insert(*id, token);
+                }
+            }
+        }
+    }
+}
+
 /// Keeps adapter shaping in line with what the caps want, without re-prompting after a refusal.
 #[derive(Debug, Default)]
 pub struct Enforcer {
@@ -157,6 +258,30 @@ mod tests {
         e.apply_with(&[], &HashMap::new(), |_, _| true, |i, k| { lifted.push((i.to_string(), k)); true });
         assert_eq!(lifted, vec![("en0".to_string(), None)]);
         assert_eq!(e.saved(), "");
+    }
+
+    #[test] fn metered_marks_once_and_restores_when_saver_stops() {
+        let want = vec![(1, "en0".to_string(), "wifi".to_string()), (2, "en1".to_string(), "wifi".to_string())];
+        let mut m = Marker::default();
+        let mut marks = 0;
+        // Network 2 is already metered by the user, so it's skipped and never touched again.
+        for _ in 0..3 {
+            m.apply_with(&want, |i, _| { marks += 1; (i == "en0").then(|| "Home".to_string()) }, |_| panic!("nothing to restore"));
+        }
+        assert_eq!(marks, 2);
+        assert_eq!(m.saved(), r#"{"1":"Home"}"#);
+
+        let mut m = Marker::restore(&m.saved());
+        let mut restored = vec![];
+        m.apply_with(&[], |_, _| panic!("nothing wanted"), |t| { restored.push(t.to_string()); true });
+        assert_eq!(restored, vec!["Home"]);
+        assert_eq!(m.saved(), "{}");
+    }
+
+    #[test] fn netsh_cost_is_read() {
+        assert!(parse_netsh_cost_unrestricted("    Cost                   : Unrestricted\n"));
+        assert!(!parse_netsh_cost_unrestricted("    Cost                   : Fixed\n"));
+        assert!(!parse_netsh_cost_unrestricted(""));
     }
 
     #[test] fn interface_names_are_checked_before_reaching_a_shell() {

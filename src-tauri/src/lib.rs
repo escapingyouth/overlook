@@ -7,7 +7,7 @@ use std::sync::{mpsc, Mutex};
 use std::time::Duration;
 use overlook_core::apps::AppTracker;
 use overlook_core::caps::{self, Cap, CapUsage, Verdict};
-use overlook_core::enforce::{self, Enforcer};
+use overlook_core::enforce::{self, Enforcer, Marker};
 use overlook_core::store::{AppsReport, HourRow, Network, NetworkTotal, Store};
 use overlook_core::system::{self, WifiNameAccess};
 use overlook_core::{Collector, LiveStatus, SAMPLE_INTERVAL};
@@ -36,7 +36,10 @@ struct Status {
     upload_alerts: bool,
     weekly_summary: bool,
     can_throttle: bool,
+    can_mark_metered: bool,
     tray_rate: bool,
+    data_saver: String,
+    data_saver_kbps: i64,
 }
 
 #[derive(Serialize)]
@@ -63,7 +66,10 @@ fn status(state: State<AppState>) -> Status {
         upload_alerts: c.store.meta("upload_alerts").as_deref() != Some("0"),
         weekly_summary: c.store.meta("weekly_summary").as_deref() != Some("0"),
         can_throttle: enforce::CAN_THROTTLE,
+        can_mark_metered: enforce::CAN_MARK_METERED,
         tray_rate: state.tray_rate.load(Ordering::Relaxed),
+        data_saver: c.store.meta("data_saver").filter(|m| m == "hotspot" || m == "always").unwrap_or("off".into()),
+        data_saver_kbps: c.store.meta("data_saver_kbps").and_then(|k| k.parse().ok()).unwrap_or(caps::DATA_SAVER_KBPS),
     }
 }
 
@@ -168,6 +174,14 @@ fn set_weekly_summary(app: AppHandle, state: State<AppState>, on: bool) {
 }
 
 #[tauri::command]
+fn set_data_saver(app: AppHandle, state: State<AppState>, mode: String, kbps: i64) {
+    let store = &state.collector.lock().unwrap().store;
+    store.set_meta("data_saver", if mode == "hotspot" || mode == "always" { &mode } else { "off" });
+    store.set_meta("data_saver_kbps", &kbps.clamp(64, 100_000).to_string());
+    app.emit("overlook://changed", ()).ok();
+}
+
+#[tauri::command]
 fn set_tray_rate(app: AppHandle, state: State<AppState>, on: bool) {
     state.collector.lock().unwrap().store.set_meta("tray_rate", if on { "1" } else { "0" });
     state.tray_rate.store(on, Ordering::Relaxed);
@@ -248,6 +262,7 @@ pub fn run() {
             let mut store = Store::open(&db_path.to_string_lossy())?;
             prune(&mut store);
             let shaped = store.meta("throttled").unwrap_or_default();
+            let marked = store.meta("metered").unwrap_or_default();
             let tray_rate = AtomicBool::new(store.meta("tray_rate").as_deref() == Some("1"));
             let mut collector = Collector::new(store);
             collector.tick();
@@ -258,6 +273,7 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 let mut enforcer = Enforcer::restore(&shaped);
+                let mut marker = Marker::restore(&marked);
                 while let Ok(mut verdict) = enforce_rx.recv() {
                     while let Ok(newer) = enforce_rx.try_recv() {
                         verdict = newer;
@@ -266,6 +282,11 @@ pub fn run() {
                     enforcer.apply(&verdict.block, &verdict.throttle);
                     if enforcer.saved() != before {
                         handle.state::<AppState>().collector.lock().unwrap().store.set_meta("throttled", &enforcer.saved());
+                    }
+                    let before = marker.saved();
+                    marker.apply(&verdict.metered);
+                    if marker.saved() != before {
+                        handle.state::<AppState>().collector.lock().unwrap().store.set_meta("metered", &marker.saved());
                     }
                 }
             });
@@ -369,7 +390,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             status, usage, totals, apps, set_per_app, delete_app_data, dropped_bytes, rename_network, delete_network, delete_all,
-            set_retention, caps, save_cap, delete_cap, set_upload_alerts, set_weekly_summary, set_tray_rate, request_wifi_names, reveal_data, save_export, show_main, quit
+            set_retention, caps, save_cap, delete_cap, set_upload_alerts, set_weekly_summary, set_data_saver, set_tray_rate, request_wifi_names, reveal_data, save_export, show_main, quit
         ])
         .build(tauri::generate_context!())
         .expect("error while building Overlook");

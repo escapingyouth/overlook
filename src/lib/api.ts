@@ -30,7 +30,10 @@ export interface Status {
   uploadAlerts: boolean;
   weeklySummary: boolean;
   canThrottle: boolean;
+  canMarkMetered: boolean;
   trayRate: boolean;
+  dataSaver: "off" | "hotspot" | "always";
+  dataSaverKbps: number;
 }
 
 export interface Cap {
@@ -95,6 +98,7 @@ export const api = {
   deleteCap: (id: number) => invoke("delete_cap", { id }),
   setUploadAlerts: (on: boolean) => invoke("set_upload_alerts", { on }),
   setWeeklySummary: (on: boolean) => invoke("set_weekly_summary", { on }),
+  setDataSaver: (mode: Status["dataSaver"], kbps: number) => invoke("set_data_saver", { mode, kbps }),
   setTrayRate: (on: boolean) => invoke("set_tray_rate", { on }),
   requestWifiNames: () => invoke("request_wifi_names"),
   revealData: () => invoke("reveal_data"),
