@@ -7,7 +7,7 @@ pub mod store;
 pub mod system;
 
 use apps::{app_key, AppTracker, Snapshot, SYSTEM_KEY};
-use processor::{Baseline, Outcome, Processor};
+use processor::{process, Outcome, GAP_THRESHOLD};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -26,7 +26,10 @@ pub struct Fingerprint {
     pub kind: String,
     pub ssid: Option<String>,
     pub router_mac: Option<String>,
+    /// Looks like a phone by gateway or name.
     pub hotspot: bool,
+    /// The OS says the connection costs money.
+    pub metered: bool,
 }
 
 impl Fingerprint {
@@ -62,8 +65,6 @@ pub struct ActiveNetwork {
 pub struct LiveStatus {
     pub active: Vec<ActiveNetwork>,
     pub primary: Option<i64>,
-    pub rate: Option<(f64, f64)>,
-    pub last_sample: f64,
     pub per_app: PerAppStatus,
 }
 
@@ -104,9 +105,19 @@ pub fn sample_apps(store: &Store, tracker: &mut AppTracker, snapshot: Result<Sna
     None
 }
 
+fn cached<T: Clone>(map: &mut HashMap<String, (T, Instant)>, key: String, load: impl FnOnce() -> T) -> T {
+    match map.get(&key) {
+        Some((value, at)) if at.elapsed() < Duration::from_secs(120) => value.clone(),
+        _ => {
+            let value = load();
+            map.insert(key, (value.clone(), Instant::now()));
+            value
+        }
+    }
+}
+
 pub struct Collector {
     pub store: Store,
-    processor: Processor,
     ssid_cache: HashMap<String, (Option<String>, Instant)>,
     metered_cache: HashMap<String, (bool, Instant)>,
     mac_cache: HashMap<String, String>,
@@ -124,7 +135,6 @@ impl Collector {
             per_app,
             tracker: AppTracker::default(),
             store,
-            processor: Processor { sample_interval: SAMPLE_INTERVAL },
             ssid_cache: HashMap::new(),
             metered_cache: HashMap::new(),
             mac_cache: HashMap::new(),
@@ -132,6 +142,11 @@ impl Collector {
             last_keys: vec![],
             last_full_sample: None,
         }
+    }
+
+    /// Forgets cached OS metered flags, after the data saver changed one.
+    pub fn recheck_metered(&mut self) {
+        self.metered_cache.clear();
     }
 
     pub fn tick(&mut self) -> bool {
@@ -157,8 +172,9 @@ impl Collector {
                 let router_mac = system::normalize_mac(&gateway.mac_addr.to_string()).or_else(|| self.cached_mac(&ip, &i.name));
                 let wifi = system::is_wifi(i);
                 let ssid = if wifi { self.cached_ssid(i, router_mac.as_deref()) } else { None };
-                let hotspot = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
-                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot })
+                let metered = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref());
+                let hotspot = system::is_phone_hotspot(&ip, ssid.as_deref());
+                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot, metered })
             })
             .collect()
     }
@@ -175,50 +191,34 @@ impl Collector {
 
     /// Keyed by router and SSID too, so joining another network re-checks at once even when one of them is unknown.
     fn cached_metered(&mut self, i: &netdev::Interface, router: Option<&str>, ssid: Option<&str>) -> bool {
-        let key = format!("{}|{}|{}", i.name, router.unwrap_or(""), ssid.unwrap_or(""));
-        match self.metered_cache.get(&key) {
-            Some(&(m, at)) if at.elapsed() < Duration::from_secs(120) => m,
-            _ => {
-                let m = system::metered(i);
-                self.metered_cache.insert(key, (m, Instant::now()));
-                m
-            }
-        }
+        cached(&mut self.metered_cache, format!("{}|{}|{}", i.name, router.unwrap_or(""), ssid.unwrap_or("")), || system::metered(i))
     }
 
     fn cached_ssid(&mut self, i: &netdev::Interface, router: Option<&str>) -> Option<String> {
-        let key = format!("{}|{}", i.name, router.unwrap_or(""));
-        if let Some((ssid, at)) = self.ssid_cache.get(&key) {
-            if at.elapsed() < Duration::from_secs(120) {
-                return ssid.clone();
-            }
-        }
-        let ssid = system::ssid(i);
-        self.ssid_cache.insert(key, (ssid.clone(), Instant::now()));
-        ssid
+        cached(&mut self.ssid_cache, format!("{}|{}", i.name, router.unwrap_or("")), || system::ssid(i))
     }
 
     pub fn sample(&mut self, interfaces: &[netdev::Interface], fingerprints: &[Fingerprint], now: f64) {
         let boot = system::boot_time();
         let counters = system::counters(interfaces);
         let primary_iface = interfaces.iter().find(|i| i.default).map(|i| i.name.clone());
-        let processor = &self.processor;
         let tracker = &mut self.tracker;
         let per_app = self.per_app;
         let snapshot = per_app.then(system::process_snapshot); // up to 2 s: run before the transaction opens
-        let mut status = LiveStatus { last_sample: now, per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
+        let mut status = LiveStatus { per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
 
+        // Connections the data saver marked metered report metered because of it, not because they're hotspots.
+        let ours = crate::enforce::Marker::marked_ids(&self.store.meta("metered").unwrap_or_default());
         self.store.transaction(|store| {
             for fp in fingerprints {
                 let Some(key) = fp.key() else { continue };
                 let name = fp.default_name();
                 let input = NetworkInput { key: &key, name: &name, kind: &fp.kind, ssid: fp.ssid.as_deref(), router_mac: fp.router_mac.as_deref(), interface: &fp.interface };
                 if let Ok(id) = store.resolve_network(&input, now) {
-                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot });
+                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot || (fp.metered && !ours.contains(&id)) });
                 }
             }
-            let primary = status.active.iter().find(|a| Some(&a.interface) == primary_iface.as_ref()).or(status.active.first()).cloned();
-            status.primary = primary.as_ref().map(|p| p.network_id);
+            status.primary = status.active.iter().find(|a| Some(&a.interface) == primary_iface.as_ref()).or(status.active.first()).map(|a| a.network_id);
 
             for iface in interfaces {
                 let Some(c) = counters.get(&iface.name) else { continue };
@@ -227,24 +227,21 @@ impl Collector {
                 if previous.is_none() && network.is_none() && c.rx == 0 && c.tx == 0 {
                     continue;
                 }
-                let (outcome, next) = processor.process(previous.as_ref(), &iface.name, c.rx, c.tx, boot, network, now);
+                let (outcome, next) = process(previous.as_ref(), &iface.name, c.rx, c.tx, boot, network, now);
                 match &outcome {
                     Outcome::Usage(d) => store.add(d),
-                    Outcome::Dropped { bytes, reason } => store.record_dropped(*bytes, reason.as_str(), now),
-                    _ => {}
-                }
-                if let (Some(p), Some(prev)) = (&primary, &previous) {
-                    status.rate = status.rate.or_else(|| live_rate(p, iface, prev, c, boot, now, processor));
+                    Outcome::Dropped { bytes } => store.record_dropped(*bytes, now),
+                    Outcome::Idle => {}
                 }
                 store.save_baseline(&next);
             }
 
             if let Some(snapshot) = snapshot {
-                status.per_app.error = sample_apps(store, tracker, snapshot, status.primary, now, processor.gap_threshold());
+                status.per_app.error = sample_apps(store, tracker, snapshot, status.primary, now, GAP_THRESHOLD);
             }
 
             if let Some(last) = store.meta("last_sample").and_then(|v| v.parse::<f64>().ok()) {
-                if now > last && now - last <= processor.gap_threshold() {
+                if now > last && now - last <= GAP_THRESHOLD {
                     store.add_coverage(last, now);
                 }
             }
@@ -252,12 +249,6 @@ impl Collector {
         });
         self.status = status;
     }
-}
-
-fn live_rate(primary: &ActiveNetwork, iface: &netdev::Interface, prev: &Baseline, c: &system::Counter, boot: i64, now: f64, p: &Processor) -> Option<(f64, f64)> {
-    let elapsed = now - prev.at;
-    (primary.interface == iface.name && prev.boot_time == boot && c.rx >= prev.rx && c.tx >= prev.tx && elapsed > 0.5 && elapsed <= p.gap_threshold())
-        .then(|| ((c.rx - prev.rx) as f64 / elapsed, (c.tx - prev.tx) as f64 / elapsed))
 }
 
 #[cfg(test)]
@@ -294,14 +285,14 @@ mod tests {
     }
 
     #[test] fn fingerprint_never_keys_on_interface_alone() {
-        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false };
+        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false, metered: false };
         assert_eq!(fp.key(), None);
         let fp = Fingerprint { ssid: Some("Home".into()), router_mac: Some("aa:bb:cc:dd:ee:ff".into()), ..fp };
         assert_eq!(fp.key().as_deref(), Some("wifi:Home"));
     }
 
     #[test] fn default_name_uses_router_suffix() {
-        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false };
+        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false, metered: false };
         assert_eq!(fp.default_name(), "Ethernet Network · EE:FF");
     }
 

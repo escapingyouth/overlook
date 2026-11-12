@@ -8,6 +8,8 @@ use std::collections::HashMap;
 // ponytail: fixed heuristic, make it a setting if people find it too chatty or too quiet.
 const UPLOAD_FLOOR: i64 = 250_000_000;
 const UPLOAD_FACTOR: i64 = 5;
+/// Low enough that video streams settle around 480p, high enough for browsing and calls.
+pub const DATA_SAVER_KBPS: i64 = 1500;
 /// An app needs a day of per-app history before it can look unusual; until then everything is new.
 const APP_HISTORY_HOURS: f64 = 24.0;
 
@@ -52,6 +54,8 @@ pub struct Verdict {
     pub block: Vec<(String, String)>,
     /// interface → kbit/s.
     pub throttle: HashMap<String, i64>,
+    /// (network id, interface, kind) the data saver covers, to mark metered.
+    pub metered: Vec<(i64, String, String)>,
 }
 
 pub fn period_bounds<Tz: TimeZone>(tz: &Tz, period: &str, reset: u32, now: f64) -> (f64, f64) {
@@ -145,6 +149,27 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
                     }
                     _ => {}
                 }
+            }
+        }
+    }
+
+    // Data saver: a speed limit makes streaming and video calls pick lower quality, which is where most data goes.
+    let saver = store.meta("data_saver").unwrap_or_default();
+    if saver == "hotspot" || saver == "always" {
+        let kbps = store.meta("data_saver_kbps").and_then(|k| k.parse().ok()).unwrap_or(DATA_SAVER_KBPS);
+        for a in active.iter().filter(|a| saver == "always" || a.hotspot) {
+            let k = v.throttle.entry(a.interface.clone()).or_insert(kbps);
+            *k = (*k).min(kbps);
+            v.metered.push((a.network_id, a.interface.clone(), a.kind.clone()));
+            if store.mark_once(&format!("saver:{}", a.network_id)) {
+                v.notices.push(Notice {
+                    title: format!("Data saver is on for {}", name(Some(a.network_id))),
+                    body: if crate::enforce::CAN_THROTTLE {
+                        format!("Overlook is limiting it to {} Mbps so video and downloads use less data. Change this in Caps & alerts.", kbps as f64 / 1000.0)
+                    } else {
+                        "Overlook is marking it as metered so updates and sync hold off. Change this in Caps & alerts.".into()
+                    },
+                });
             }
         }
     }
@@ -355,6 +380,34 @@ mod tests {
         assert_eq!(v.notices.len(), 1);
         assert_eq!(v.notices[0].title, "Sam’s iPhone looks like a phone hotspot");
         assert!(evaluate(&s, &[active(phone)], now).notices.is_empty());
+    }
+
+    #[test] fn data_saver_limits_hotspots_or_everything() {
+        let s = Store::open(":memory:").unwrap();
+        let now = crate::now();
+        let net = |key, name| NetworkInput { key, name, kind: "wifi", ssid: Some(name), router_mac: None, interface: "en0" };
+        let home = s.resolve_network(&net("wifi:Home", "Home"), now).unwrap();
+        let phone = s.resolve_network(&net("wifi:Pixel", "Pixel"), now).unwrap();
+        s.save_cap(&Cap { id: 0, network_id: Some(phone), period: "month".into(), reset: 1, limit_bytes: 1, alerts: vec![], action: "throttle".into(), throttle_kbps: 256, app_id: None });
+        let active = [
+            ActiveNetwork { network_id: home, interface: "en0".into(), kind: "wifi".into(), hotspot: false },
+            ActiveNetwork { network_id: phone, interface: "en1".into(), kind: "wifi".into(), hotspot: true },
+        ];
+        s.add(&UsageDelta { network_id: phone, rx: 10, tx: 0, estimated: false, at: now });
+
+        assert!(!evaluate(&s, &active, now).throttle.contains_key("en0"), "off by default");
+        s.set_meta("data_saver", "hotspot");
+        let v = evaluate(&s, &active, now);
+        assert_eq!(v.throttle.get("en0"), None);
+        assert_eq!(v.throttle["en1"], 256, "a stricter cap throttle wins");
+        assert_eq!(v.metered, vec![(phone, "en1".to_string(), "wifi".to_string())]);
+        assert_eq!(v.notices.iter().filter(|n| n.title.starts_with("Data saver")).count(), 1);
+
+        s.set_meta("data_saver", "always");
+        s.set_meta("data_saver_kbps", "3000");
+        let v = evaluate(&s, &active, now);
+        assert_eq!(v.throttle["en0"], 3000);
+        assert_eq!(v.notices.iter().filter(|n| n.title.starts_with("Data saver")).count(), 1, "only the newly saved network is announced");
     }
 
     #[test] fn app_spikes_alert_once_a_day_after_a_day_of_history() {

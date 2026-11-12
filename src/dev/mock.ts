@@ -9,9 +9,9 @@ let seed = 7;
 const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
 
 const networks = [
-  { id: 1, key: "wifi:Lakeview 5G", name: "Lakeview 5G", customName: null, kind: "wifi", ssid: "Lakeview 5G", routerMac: "a4:2b:b0:11:22:33", firstSeen: now / 1000 - 400 * 86400, lastSeen: now / 1000, lastInterface: "en0" },
-  { id: 2, key: "router:3c:22:fb:44:55:66", name: "Ethernet Network · 55:66", customName: "Studio", kind: "ethernet", ssid: null, routerMac: "3c:22:fb:44:55:66", firstSeen: now / 1000 - 400 * 86400, lastSeen: now / 1000 - 15 * 3600, lastInterface: "en5" },
-  { id: 3, key: "wifi:Sam’s iPhone", name: "Sam’s iPhone", customName: null, kind: "wifi", ssid: "Sam’s iPhone", routerMac: "92:12:4c:aa:bb:cc", firstSeen: now / 1000 - 300 * 86400, lastSeen: now / 1000 - 3 * 86400, lastInterface: "en0" },
+  { id: 1, key: "wifi:Lakeview 5G", name: "Lakeview 5G", customName: null, kind: "wifi", ssid: "Lakeview 5G", routerMac: "a4:2b:b0:11:22:33", firstSeen: now / 1000 - 400 * 86400, lastSeen: now / 1000 },
+  { id: 2, key: "router:3c:22:fb:44:55:66", name: "Ethernet Network · 55:66", customName: "Studio", kind: "ethernet", ssid: null, routerMac: "3c:22:fb:44:55:66", firstSeen: now / 1000 - 400 * 86400, lastSeen: now / 1000 - 15 * 3600 },
+  { id: 3, key: "wifi:Sam’s iPhone", name: "Sam’s iPhone", customName: null, kind: "wifi", ssid: "Sam’s iPhone", routerMac: "92:12:4c:aa:bb:cc", firstSeen: now / 1000 - 300 * 86400, lastSeen: now / 1000 - 3 * 86400 },
 ];
 
 const rows = new Map<number, HourRow[]>([[1, []], [2, []], [3, []]]);
@@ -74,6 +74,7 @@ const platform = params.get("platform") ?? "macos";
 let perAppOn = appsMode !== "off" && appsMode !== "deny";
 let trayRate = false;
 let weeklySummary = true;
+let dataSaver = { mode: "off", kbps: 1500 };
 
 // name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
 const appDefs: [string, string, number, number][] = [
@@ -104,7 +105,7 @@ mockIPC((cmd, args: any) => {
       return {
         networks: params.has("empty") ? [] : networks,
         live: { active: [params.has("hotspot") ? { networkId: 3, interface: "en0", kind: "wifi", hotspot: true } : { networkId: 1, interface: "en0", kind: "wifi", hotspot: false }],
-          primary: params.has("hotspot") ? 3 : 1, rate: [1_840_000, 96_000], lastSample: now / 1000,
+          primary: params.has("hotspot") ? 3 : 1,
           perApp: { enabled: perAppOn, error: appsMode === "error" ? "The per-app helper stopped responding" : null, experimental: platform !== "macos" } },
         firstCoveredHour: nowHour - 400 * 24,
         wifiNameAccess: params.get("access") ?? "granted",
@@ -114,7 +115,10 @@ mockIPC((cmd, args: any) => {
         uploadAlerts: true,
         weeklySummary,
         canThrottle: params.get("platform") !== "windows",
+        canMarkMetered: platform !== "macos",
         trayRate,
+        dataSaver: dataSaver.mode,
+        dataSaverKbps: dataSaver.kbps,
       };
     case "usage":
       return { rows: usage(args.network, args.fromHour, args.toHour), coverage: coverage.filter(([h]) => h >= args.fromHour && h <= args.toHour) };
@@ -133,6 +137,10 @@ mockIPC((cmd, args: any) => {
       });
     case "set_weekly_summary":
       weeklySummary = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "set_data_saver":
+      dataSaver = { mode: args.mode, kbps: args.kbps };
       setTimeout(() => emit("overlook://changed"));
       return null;
     case "set_tray_rate":
@@ -164,3 +172,4 @@ mockIPC((cmd, args: any) => {
       return null;
   }
 }, { shouldMockEvents: true });
+setInterval(() => emit("overlook://rate", [1_840_000, 96_000]), 1000);

@@ -15,7 +15,7 @@ export default function Tray() {
   const active = status?.live.active.find((a) => a.networkId === id);
   // The popover is fixed-height, so only the cap closest to running out.
   const caps = capsFor(useCaps() ?? [], id).sort((a, b) => b.used / b.limitBytes - a.used / a.limitBytes).slice(0, 1);
-  const now = useRate(status?.live.rate ?? null);
+  const now = useRate(id !== null);
   const report = useReport(id, "day", undefined, status?.firstCoveredHour ?? null);
   const today = useLive(async () => {
     if (id === null) return { rx: 0, tx: 0 };
@@ -58,7 +58,7 @@ export default function Tray() {
             <span>Last 24 hours</span>
             <span className="num" style={{ color: "var(--text)" }}>{bytes(report.total)}</span>
           </div>
-          <UsageChart report={report} mode="both" height={48} compact />
+          <UsageChart report={report} />
         </div>
       )}
 

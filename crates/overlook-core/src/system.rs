@@ -157,15 +157,6 @@ pub fn neighbor_mac(_ip: &str, _interface: &str) -> Option<String> {
     None
 }
 
-pub fn parse_arp(output: &str, ip: &str, interface: &str) -> Option<String> {
-    let needle = format!("({ip})");
-    output.lines().find_map(|l| {
-        let f: Vec<_> = l.split_whitespace().collect();
-        let on = f.iter().position(|t| *t == "on")?;
-        (f.contains(&needle.as_str()) && f.get(on + 1) == Some(&interface)).then(|| normalize_mac(f.get(3)?)).flatten()
-    })
-}
-
 pub fn normalize_mac(raw: &str) -> Option<String> {
     let parts: Vec<_> = raw.split([':', '-']).collect();
     if parts.len() != 6 || !parts.iter().all(|p| (1..=2).contains(&p.len()) && p.chars().all(|c| c.is_ascii_hexdigit())) {
@@ -247,7 +238,7 @@ pub fn ssid(interface: &netdev::Interface) -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let out = Command::new("netsh").args(["wlan", "show", "interfaces"]).creation_flags(CREATE_NO_WINDOW).output().ok()?;
-    parse_netsh(&String::from_utf8_lossy(&out.stdout), interface.friendly_name.as_deref()?)
+    parse_netsh(&String::from_utf8_lossy(&out.stdout), interface.friendly_name.as_deref()?, "SSID")
 }
 
 #[cfg(target_os = "linux")]
@@ -260,14 +251,15 @@ pub fn ssid(interface: &netdev::Interface) -> Option<String> {
     Some(String::from_utf8_lossy(&nm.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
-pub fn parse_netsh(output: &str, adapter: &str) -> Option<String> {
+/// One field (SSID, Profile, …) from `netsh wlan show interfaces` for the named adapter.
+pub fn parse_netsh(output: &str, adapter: &str, field: &str) -> Option<String> {
     let mut in_block = false;
     for line in output.lines() {
         let Some((k, v)) = line.split_once(':') else { continue };
         let (k, v) = (k.trim(), v.trim());
         if k == "Name" {
             in_block = v == adapter;
-        } else if in_block && k == "SSID" && !v.is_empty() {
+        } else if in_block && k == field && !v.is_empty() {
             return Some(v.to_string());
         }
     }
@@ -461,17 +453,16 @@ mod tests {
     }
 
     #[test] fn netsh_picks_ssid_for_adapter_not_bssid() {
-        let out = "There is 1 interface on the system:\n\n    Name                   : Wi-Fi 2\n    SSID                   : Other\n\n    Name                   : Wi-Fi\n    Description            : Intel\n    BSSID                  : aa:bb:cc:dd:ee:ff\n    SSID                   : Home Net\n";
-        assert_eq!(parse_netsh(out, "Wi-Fi").as_deref(), Some("Home Net"));
-        assert_eq!(parse_netsh(out, "Ethernet"), None);
+        let out = "There is 1 interface on the system:\n\n    Name                   : Wi-Fi 2\n    SSID                   : Other\n\n    Name                   : Wi-Fi\n    Description            : Intel\n    BSSID                  : aa:bb:cc:dd:ee:ff\n    SSID                   : Home Net\n    Profile                : Home Profile\n";
+        assert_eq!(parse_netsh(out, "Wi-Fi", "SSID").as_deref(), Some("Home Net"));
+        assert_eq!(parse_netsh(out, "Wi-Fi", "Profile").as_deref(), Some("Home Profile"));
+        assert_eq!(parse_netsh(out, "Ethernet", "SSID"), None);
     }
 
-    #[test] fn arp_fallback_matches_ip_and_interface() {
-        let out = "? (10.0.0.9) at 1:2:3:4:5:6 on en1 ifscope [ethernet]\n? (10.0.0.1) at 8a:79:3:bc:ad:59 on en0 ifscope [ethernet]\n? (10.0.0.7) at (incomplete) on en0 ifscope [ethernet]";
-        assert_eq!(parse_arp(out, "10.0.0.1", "en0").as_deref(), Some("8a:79:03:bc:ad:59"));
-        assert_eq!(parse_arp(out, "10.0.0.1", "en1"), None);
-        assert_eq!(parse_arp(out, "10.0.0.7", "en0"), None);
+    #[test] fn macs_normalize() {
+        assert_eq!(normalize_mac("8a:79:3:bc:ad:59").as_deref(), Some("8a:79:03:bc:ad:59"));
         assert_eq!(normalize_mac("AA-BB-CC-DD-EE-0F").as_deref(), Some("aa:bb:cc:dd:ee:0f"));
+        assert_eq!(normalize_mac("(incomplete)"), None);
     }
 
     #[test] fn phone_hotspots_are_recognised() {

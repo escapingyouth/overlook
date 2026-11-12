@@ -260,7 +260,7 @@ function DataPane({ status }: Readonly<{ status: Status }>) {
     <>
       <h3>Data</h3>
       <Setting title="Keep history for" desc="Stored as hourly totals, about 100 KB per network per year. Two years allows a full year-over-year comparison.">
-        <Segmented size="sm" label="Retention" value={String(status.retentionMonths)} onChange={(v) => api.setRetention(Number(v))}
+        <Segmented label="Retention" value={String(status.retentionMonths)} onChange={(v) => api.setRetention(Number(v))}
           options={[{ value: "12", label: "1 year" }, { value: "24", label: "2 years" }, { value: "60", label: "5 years" }, { value: "0", label: "Forever" }]} />
       </Setting>
       <Setting title="Usage database" desc={first ? `Collecting since ${new Date(first * 3_600_000).toLocaleDateString(undefined, { dateStyle: "medium" })} · ${status.networks.length} networks` : "No data yet"}>

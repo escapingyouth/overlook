@@ -20,7 +20,6 @@ pub struct Network {
     pub router_mac: Option<String>,
     pub first_seen: f64,
     pub last_seen: f64,
-    pub last_interface: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -151,11 +150,11 @@ impl Store {
     }
 
     pub fn networks(&self) -> Vec<Network> {
-        let mut s = self.db.prepare("SELECT id, key, name, custom_name, kind, ssid, router_mac, first_seen, last_seen, last_interface FROM networks ORDER BY last_seen DESC").unwrap();
+        let mut s = self.db.prepare("SELECT id, key, name, custom_name, kind, ssid, router_mac, first_seen, last_seen FROM networks ORDER BY last_seen DESC").unwrap();
         s.query_map([], |r| {
             Ok(Network {
                 id: r.get(0)?, key: r.get(1)?, name: r.get(2)?, custom_name: r.get(3)?, kind: r.get(4)?,
-                ssid: r.get(5)?, router_mac: r.get(6)?, first_seen: r.get(7)?, last_seen: r.get(8)?, last_interface: r.get(9)?,
+                ssid: r.get(5)?, router_mac: r.get(6)?, first_seen: r.get(7)?, last_seen: r.get(8)?,
             })
         })
         .unwrap()
@@ -192,17 +191,11 @@ impl Store {
     }
 
     pub fn hours(&self, network: Option<i64>, from_hour: i64, to_hour: i64) -> Vec<HourRow> {
-        let map = |r: &rusqlite::Row| Ok(HourRow { hour: r.get(0)?, rx: r.get(1)?, tx: r.get(2)?, estimated_rx: r.get(3)?, estimated_tx: r.get(4)? });
-        match network {
-            None => {
-                let mut s = self.db.prepare("SELECT hour, SUM(rx), SUM(tx), SUM(est_rx), SUM(est_tx) FROM usage WHERE hour BETWEEN ? AND ? GROUP BY hour ORDER BY hour").unwrap();
-                s.query_map([from_hour, to_hour], map).unwrap().filter_map(Result::ok).collect()
-            }
-            Some(id) => {
-                let mut s = self.db.prepare("SELECT hour, rx, tx, est_rx, est_tx FROM usage WHERE hour BETWEEN ? AND ? AND network_id = ? ORDER BY hour").unwrap();
-                s.query_map([from_hour, to_hour, id], map).unwrap().filter_map(Result::ok).collect()
-            }
-        }
+        let mut s = self.db.prepare("SELECT hour, SUM(rx), SUM(tx), SUM(est_rx), SUM(est_tx) FROM usage WHERE hour BETWEEN ?1 AND ?2 AND (network_id = ?3 OR ?3 IS NULL) GROUP BY hour ORDER BY hour").unwrap();
+        s.query_map(params![from_hour, to_hour, network], |r| Ok(HourRow { hour: r.get(0)?, rx: r.get(1)?, tx: r.get(2)?, estimated_rx: r.get(3)?, estimated_tx: r.get(4)? }))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect()
     }
 
     pub fn totals_by_network(&self, from_hour: i64, to_hour: i64) -> Vec<NetworkTotal> {
@@ -347,8 +340,9 @@ impl Store {
             .ok();
     }
 
-    pub fn record_dropped(&self, bytes: u64, reason: &str, at: f64) {
-        self.db.execute("INSERT INTO dropped (at, bytes, reason) VALUES (?, ?, ?)", params![at, bytes.min(i64::MAX as u64) as i64, reason]).ok();
+    pub fn record_dropped(&self, bytes: u64, at: f64) {
+        // `reason` is unused, but NOT NULL in existing databases.
+        self.db.execute("INSERT INTO dropped (at, bytes, reason) VALUES (?, ?, '')", params![at, bytes.min(i64::MAX as u64) as i64]).ok();
     }
 
     pub fn dropped_bytes(&self, since: f64) -> i64 {

@@ -2,8 +2,6 @@
 
 Overlook records how much data you use on each network. It keeps a separate history for each network and shows interactive charts for ranges from 24 hours to 1 year. It runs from the menu bar / system tray, and everything stays on your computer.
 
-![Overview](docs/overview-dark.png)
-
 ## Build & run
 Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri system packages](https://tauri.app/start/prerequisites/) (webkit2gtk, libayatana-appindicator).
 
@@ -11,9 +9,9 @@ Prerequisites: Rust (`rustup`), Node 20+. On Linux, also install the [Tauri syst
 npm install
 npm run tauri dev                     # development
 npm run tauri build                   # release bundles: .app/.dmg, .msi/.exe, .deb/.rpm/.AppImage
-cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (56 tests)
+cargo test -p overlook-core              # collector, attribution, per-app, caps, storage (59 tests)
 cargo test -p overlook-helper            # Windows/Linux per-app helper (6 tests)
-cargo test --workspace                   # everything, including the shell (68 tests)
+cargo test --workspace                   # everything, including the shell (71 tests)
 npm test                              # ranges, buckets, statistics, per-app (23 tests)
 ```
 
@@ -111,6 +109,7 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
 - Overlook only records while it's running. Counters restart at boot, so turn on *Open at login*; it then launches hidden in the tray.
 - LAN traffic (casting, NAS backups) is counted, which may not match a data cap.
 - **Caps.** Blocking disconnects Wi-Fi (any adapter on Linux, via NetworkManager) and repeats while the cap is used up; Ethernet can't be disconnected on macOS/Windows. Throttling asks for an administrator password when it starts and ends, and isn't available on Windows. Caps on a single app (needs per-app tracking) only alert. Unusual-upload alerts fire when an hour's upload exceeds 5× that network's 14-day hourly average and at least 250 MB. With per-app tracking on, the same switch alerts when an app's hour on a network exceeds 5× its typical hour there and 250 MB, at most once per app, network and day, and only after a day of per-app history; System is never singled out.
+- **Data saver** (off by default, in Caps & alerts): on phone hotspots, or on every network, Overlook limits speed (1.5 Mbps by default; 750 kbps or 3 Mbps also offered) so video and streaming apps pick a lower quality by themselves, which is where most data goes. It uses the same throttle as caps, so it needs an administrator password when it starts and ends, isn't available on Windows, and a stricter cap throttle wins. On Windows (Wi-Fi profiles, via `netsh`) and Linux (NetworkManager), it also marks the connection metered so OS updates and cloud sync hold off, skips a connection that's already metered, and puts each one back when the saver no longer covers it, even after a restart. macOS has no public way to set Low Data Mode, but it already treats phone hotspots as expensive. It notifies once per network the first time it kicks in.
 - Per-app tracking is opt-in and only counts from when it's turned on.
 - **Weekly summary** (on by default, in Caps & alerts): one notification from 09:00 on Monday, or the next time Overlook runs that week, with last week's total, the change from the week before (only when that week was tracked), the busiest network and, with per-app on, the top app. Weeks run Monday to Sunday regardless of locale, and a week with no usage is skipped.
 - **Phone hotspots** are recognised when the OS says the connection costs money (macOS: Network.framework marks the route expensive, which also covers USB tethering; Windows: the internet profile's connection cost is fixed or variable; Linux: NetworkManager's metered flag, guessed or set), and otherwise by gateway (iPhone `172.20.10.1`, older Android `192.168.43.1`) or a phone-style Wi-Fi name (iPhone, Galaxy, Pixel, …). On macOS and Windows only the interface carrying the default route can be flagged by the OS, and on Windows (and Linux) a connection you've set as metered counts too; one that is wrongly flagged can be dismissed with *Not a hotspot*. Overlook notifies once per hotspot that has no cap of its own.
@@ -127,7 +126,7 @@ Remove-Item -Recurse -Force "$env:ProgramFiles\Overlook Helper", "$env:ProgramDa
   - Canvas `#09090B`, cards `#111113`, controls `#18181B`.
   - Borders are hairlines at 6.5% white.
   - Text uses three steps: `#EDEDEF`, `#9A9AA3`, `#5D5D66`.
-- **App icon:** lavender/indigo binoculars on a near-black rounded square (`docs/app-icon.png`); the menu-bar/tray icon is a monochrome template version, and the sidebar logo uses Hugeicons' binoculars.
+- **App icon:** lavender/indigo binoculars on a near-black rounded square; the menu-bar/tray icon is a monochrome template version, and the sidebar logo uses Hugeicons' binoculars.
 - **Typeface:** Plus Jakarta Sans (variable), bundled through Fontsource so it works offline and renders identically on every OS. Body text uses weight 450 with slightly opened tracking; numbers use tabular figures.
 - **Palette:** lavender and indigo throughout. Download is lavender `#A29EF6` (dark) / `#9B98F3` (light), upload is indigo `#6366F1` / `#4F46E5`, and the accent is indigo. The pair passes colour-vision-deficiency and contrast checks in both modes; the dark lavender sits slightly above the recommended lightness band, which is deliberate for this look. Green, amber and red are reserved for status. The theme follows the system or a persisted System/Light/Dark choice, and the native title bar matches it.
 - **Layout:** separate borderless cards (the surface sits on a darker canvas in dark mode, white on light grey in light mode) with 16 px gutters.
