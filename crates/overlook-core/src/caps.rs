@@ -164,7 +164,11 @@ pub fn evaluate(store: &Store, active: &[ActiveNetwork], now: f64) -> Verdict {
             if store.mark_once(&format!("saver:{}", a.network_id)) {
                 v.notices.push(Notice {
                     title: format!("Data saver is on for {}", name(Some(a.network_id))),
-                    body: format!("Overlook limits it to {} Mbps so video and downloads use less data. Change this in Caps & alerts.", kbps as f64 / 1000.0),
+                    body: if crate::enforce::CAN_THROTTLE {
+                        format!("Overlook is limiting it to {} Mbps so video and downloads use less data. Change this in Caps & alerts.", kbps as f64 / 1000.0)
+                    } else {
+                        "Overlook is marking it as metered so updates and sync hold off. Change this in Caps & alerts.".into()
+                    },
                 });
             }
         }

@@ -238,7 +238,7 @@ pub fn ssid(interface: &netdev::Interface) -> Option<String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let out = Command::new("netsh").args(["wlan", "show", "interfaces"]).creation_flags(CREATE_NO_WINDOW).output().ok()?;
-    parse_netsh(&String::from_utf8_lossy(&out.stdout), interface.friendly_name.as_deref()?)
+    parse_netsh(&String::from_utf8_lossy(&out.stdout), interface.friendly_name.as_deref()?, "SSID")
 }
 
 #[cfg(target_os = "linux")]
@@ -251,14 +251,15 @@ pub fn ssid(interface: &netdev::Interface) -> Option<String> {
     Some(String::from_utf8_lossy(&nm.stdout).trim().to_string()).filter(|s| !s.is_empty())
 }
 
-pub fn parse_netsh(output: &str, adapter: &str) -> Option<String> {
+/// One field (SSID, Profile, …) from `netsh wlan show interfaces` for the named adapter.
+pub fn parse_netsh(output: &str, adapter: &str, field: &str) -> Option<String> {
     let mut in_block = false;
     for line in output.lines() {
         let Some((k, v)) = line.split_once(':') else { continue };
         let (k, v) = (k.trim(), v.trim());
         if k == "Name" {
             in_block = v == adapter;
-        } else if in_block && k == "SSID" && !v.is_empty() {
+        } else if in_block && k == field && !v.is_empty() {
             return Some(v.to_string());
         }
     }
@@ -452,9 +453,10 @@ mod tests {
     }
 
     #[test] fn netsh_picks_ssid_for_adapter_not_bssid() {
-        let out = "There is 1 interface on the system:\n\n    Name                   : Wi-Fi 2\n    SSID                   : Other\n\n    Name                   : Wi-Fi\n    Description            : Intel\n    BSSID                  : aa:bb:cc:dd:ee:ff\n    SSID                   : Home Net\n";
-        assert_eq!(parse_netsh(out, "Wi-Fi").as_deref(), Some("Home Net"));
-        assert_eq!(parse_netsh(out, "Ethernet"), None);
+        let out = "There is 1 interface on the system:\n\n    Name                   : Wi-Fi 2\n    SSID                   : Other\n\n    Name                   : Wi-Fi\n    Description            : Intel\n    BSSID                  : aa:bb:cc:dd:ee:ff\n    SSID                   : Home Net\n    Profile                : Home Profile\n";
+        assert_eq!(parse_netsh(out, "Wi-Fi", "SSID").as_deref(), Some("Home Net"));
+        assert_eq!(parse_netsh(out, "Wi-Fi", "Profile").as_deref(), Some("Home Profile"));
+        assert_eq!(parse_netsh(out, "Ethernet", "SSID"), None);
     }
 
     #[test] fn macs_normalize() {

@@ -286,7 +286,10 @@ pub fn run() {
                     let before = marker.saved();
                     marker.apply(&verdict.metered);
                     if marker.saved() != before {
-                        handle.state::<AppState>().collector.lock().unwrap().store.set_meta("metered", &marker.saved());
+                        let state = handle.state::<AppState>();
+                        let mut c = state.collector.lock().unwrap();
+                        c.store.set_meta("metered", &marker.saved());
+                        c.recheck_metered();
                     }
                 }
             });

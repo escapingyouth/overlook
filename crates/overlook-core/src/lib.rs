@@ -26,7 +26,10 @@ pub struct Fingerprint {
     pub kind: String,
     pub ssid: Option<String>,
     pub router_mac: Option<String>,
+    /// Looks like a phone by gateway or name.
     pub hotspot: bool,
+    /// The OS says the connection costs money.
+    pub metered: bool,
 }
 
 impl Fingerprint {
@@ -141,6 +144,11 @@ impl Collector {
         }
     }
 
+    /// Forgets cached OS metered flags, after the data saver changed one.
+    pub fn recheck_metered(&mut self) {
+        self.metered_cache.clear();
+    }
+
     pub fn tick(&mut self) -> bool {
         let interfaces: Vec<_> = netdev::get_interfaces().into_iter().filter(system::is_physical).collect();
         let fingerprints = self.fingerprints(&interfaces);
@@ -164,8 +172,9 @@ impl Collector {
                 let router_mac = system::normalize_mac(&gateway.mac_addr.to_string()).or_else(|| self.cached_mac(&ip, &i.name));
                 let wifi = system::is_wifi(i);
                 let ssid = if wifi { self.cached_ssid(i, router_mac.as_deref()) } else { None };
-                let hotspot = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref()) || system::is_phone_hotspot(&ip, ssid.as_deref());
-                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot })
+                let metered = self.cached_metered(i, router_mac.as_deref(), ssid.as_deref());
+                let hotspot = system::is_phone_hotspot(&ip, ssid.as_deref());
+                Some(Fingerprint { interface: i.name.clone(), kind: if wifi { "wifi" } else { "ethernet" }.into(), ssid, router_mac, hotspot, metered })
             })
             .collect()
     }
@@ -198,13 +207,15 @@ impl Collector {
         let snapshot = per_app.then(system::process_snapshot); // up to 2 s: run before the transaction opens
         let mut status = LiveStatus { per_app: PerAppStatus { enabled: per_app, error: None, experimental: cfg!(not(target_os = "macos")) }, ..Default::default() };
 
+        // Connections the data saver marked metered report metered because of it, not because they're hotspots.
+        let ours = crate::enforce::Marker::marked_ids(&self.store.meta("metered").unwrap_or_default());
         self.store.transaction(|store| {
             for fp in fingerprints {
                 let Some(key) = fp.key() else { continue };
                 let name = fp.default_name();
                 let input = NetworkInput { key: &key, name: &name, kind: &fp.kind, ssid: fp.ssid.as_deref(), router_mac: fp.router_mac.as_deref(), interface: &fp.interface };
                 if let Ok(id) = store.resolve_network(&input, now) {
-                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot });
+                    status.active.push(ActiveNetwork { network_id: id, interface: fp.interface.clone(), kind: fp.kind.clone(), hotspot: fp.hotspot || (fp.metered && !ours.contains(&id)) });
                 }
             }
             status.primary = status.active.iter().find(|a| Some(&a.interface) == primary_iface.as_ref()).or(status.active.first()).map(|a| a.network_id);
@@ -274,14 +285,14 @@ mod tests {
     }
 
     #[test] fn fingerprint_never_keys_on_interface_alone() {
-        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false };
+        let fp = Fingerprint { interface: "en0".into(), kind: "wifi".into(), ssid: None, router_mac: None, hotspot: false, metered: false };
         assert_eq!(fp.key(), None);
         let fp = Fingerprint { ssid: Some("Home".into()), router_mac: Some("aa:bb:cc:dd:ee:ff".into()), ..fp };
         assert_eq!(fp.key().as_deref(), Some("wifi:Home"));
     }
 
     #[test] fn default_name_uses_router_suffix() {
-        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false };
+        let fp = Fingerprint { interface: "en5".into(), kind: "ethernet".into(), ssid: None, router_mac: Some("aa:bb:cc:dd:ee:ff".into()), hotspot: false, metered: false };
         assert_eq!(fp.default_name(), "Ethernet Network · EE:FF");
     }
 
