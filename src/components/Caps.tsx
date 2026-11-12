@@ -10,6 +10,8 @@ const PER = { day: "a day", week: "a week", month: "a month" } as const;
 const PERIOD_DAYS = { day: 1, week: 7, month: 30.44 } as const;
 const PRESETS = [50, 80, 90, 100];
 const SPEEDS = [256, 1000, 5000];
+// Roughly 360p, 480p and 720p video.
+const SAVER_SPEEDS = [750, 1500, 3000];
 const kbps = (k: number) => (k >= 1000 ? `${k / 1000} Mbps` : `${k} kbps`);
 const day = (sec: number) => fmtDate(new Date(sec * 1000), { month: "short", day: "numeric" });
 
@@ -187,6 +189,29 @@ export function CapsPane({ status, newCapFor }: Readonly<{ status: Status; newCa
       </Setting>
       <Setting title="Weekly summary" desc={`A notification on Monday with last week's total, how it compares with the week before, and the network${status.live.perApp.enabled ? " and app" : ""} that used the most.`}>
         <Toggle label="Weekly summary" checked={status.weeklySummary} onChange={(v) => api.setWeeklySummary(v)} />
+      </Setting>
+      <Setting
+        title="Data saver"
+        desc={[
+          status.canThrottle && `Limits speed to ${kbps(status.dataSaverKbps)} so video and streaming drop to lower quality and downloads use less data. Your OS asks for an administrator password when the limit starts and ends.`,
+          status.canMarkMetered && `Marks the connection as metered so ${status.platform === "windows" ? "Windows Update, OneDrive and Store apps" : "updates and apps that respect it"} hold off${status.platform === "windows" ? " (Wi-Fi only)" : ""}, and puts it back afterwards.`,
+        ].filter(Boolean).join(" ")}
+      >
+        {(
+          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+            <Segmented
+              label="Data saver"
+              value={status.dataSaver}
+              options={[{ value: "off", label: "Off" }, { value: "hotspot", label: "Hotspots" }, { value: "always", label: "Always" }]}
+              onChange={(mode) => api.setDataSaver(mode, status.dataSaverKbps)}
+            />
+            {status.canThrottle && status.dataSaver !== "off" && (
+              <select className="text" style={{ width: 110 }} value={status.dataSaverKbps} aria-label="Data saver speed" onChange={(e) => api.setDataSaver(status.dataSaver, Number(e.target.value))}>
+                {[...new Set([...SAVER_SPEEDS, status.dataSaverKbps])].map((k) => <option key={k} value={k}>{kbps(k)}</option>)}
+              </select>
+            )}
+          </div>
+        )}
       </Setting>
     </>
   );

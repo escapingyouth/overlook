@@ -74,6 +74,7 @@ const platform = params.get("platform") ?? "macos";
 let perAppOn = appsMode !== "off" && appsMode !== "deny";
 let trayRate = false;
 let weeklySummary = true;
+let dataSaver = { mode: "off", kbps: 1500 };
 
 // name, colour, share of covered traffic (sums to ~0.84, the rest shows as System), upload weight
 const appDefs: [string, string, number, number][] = [
@@ -114,7 +115,10 @@ mockIPC((cmd, args: any) => {
         uploadAlerts: true,
         weeklySummary,
         canThrottle: params.get("platform") !== "windows",
+        canMarkMetered: platform !== "macos",
         trayRate,
+        dataSaver: dataSaver.mode,
+        dataSaverKbps: dataSaver.kbps,
       };
     case "usage":
       return { rows: usage(args.network, args.fromHour, args.toHour), coverage: coverage.filter(([h]) => h >= args.fromHour && h <= args.toHour) };
@@ -133,6 +137,10 @@ mockIPC((cmd, args: any) => {
       });
     case "set_weekly_summary":
       weeklySummary = args.on;
+      setTimeout(() => emit("overlook://changed"));
+      return null;
+    case "set_data_saver":
+      dataSaver = { mode: args.mode, kbps: args.kbps };
       setTimeout(() => emit("overlook://changed"));
       return null;
     case "set_tray_rate":
